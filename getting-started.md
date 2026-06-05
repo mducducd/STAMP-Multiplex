@@ -240,7 +240,8 @@ stamp --config stamp-test-experiment/config.yaml crossval
 ### Multiplex Marker Selection
 
 For multiplex `.h5` feature files, STAMP can train marker-aware models directly
-from per-marker embeddings.
+from per-marker embeddings. For multiplex training, use
+`advanced_config.model_name: "marker_fusion"`.
 If your files contain:
 
 - a dataset `marker_embeddings` with shape `(tiles, markers, features)`, and
@@ -264,7 +265,7 @@ crossval:
   slide_table: "/absolute/path/to/slide.csv"
   ground_truth_label: "KRAS"
 
-  # Optional but recommended for multiplex marker-aware training
+  # Recommended for multiplex marker-aware training
   feature_dataset_name: "marker_embeddings"
 
   # Train on one marker:
@@ -274,11 +275,13 @@ crossval:
   selected_markers: ["PanCK", "HER2"]
 
 advanced_config:
+  # Use marker_fusion for multiplex marker-aware training
   model_name: "marker_fusion"
 ```
 
 Notes:
 
+- Multiplex training should use `model_name: "marker_fusion"`.
 - `selected_markers` may be a single marker name or a list of marker names.
 - Marker names are matched against the HDF5 `marker_names` attribute.
 - If `selected_markers` is used with `model_name: "marker_fusion"` and

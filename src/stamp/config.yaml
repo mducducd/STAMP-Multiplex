@@ -59,6 +59,8 @@ crossval:
 
   # Directory the extracted features are saved in.
   feature_dir: "/path/your/extracted/features/are/stored/in"
+  # For multiplex marker-aware training, set
+  # advanced_config.model_name: "marker_fusion".
   # Optional: choose which HDF5 dataset to read from each file.
   #feature_dataset_name: "marker_embeddings"
   # Optional marker subset for multiplex marker-aware training.
@@ -124,6 +126,8 @@ training:
 
   # Directory the extracted features are saved in.
   feature_dir: "/path/your/extracted/features/are/stored/in"
+  # For multiplex marker-aware training, set
+  # advanced_config.model_name: "marker_fusion".
   # Optional: choose which HDF5 dataset to read from each file.
   #feature_dataset_name: "marker_embeddings"
   # Optional marker subset for multiplex marker-aware training.
@@ -183,6 +187,8 @@ deployment:
 
   # Directory the extracted features are saved in.
   feature_dir: "/path/your/extracted/features/are/stored/in"
+  # For multiplex marker-aware deployment, the checkpoint should come from
+  # a model trained with advanced_config.model_name: "marker_fusion".
   # Optional: choose which HDF5 dataset to read from each file.
   #feature_dataset_name: "marker_embeddings"
   # Optional marker subset for multiplex marker-aware deployment.
