@@ -19,6 +19,10 @@ from stamp.modeling.data import (
     patient_to_survival_from_clini_table_,
     slide_to_patient_from_slide_table_,
 )
+from stamp.modeling.markers import (
+    normalize_selected_markers,
+    resolve_marker_loading_config,
+)
 from stamp.modeling.registry import ModelName, load_model_class
 from stamp.types import (
     Category,
@@ -72,6 +76,8 @@ def deploy_categorical_model_(
     filename_label: PandasLabel,
     num_workers: int,
     accelerator: str | Accelerator,
+    feature_dataset_name: str = "auto",
+    selected_markers: str | Sequence[str] | None = None,
     drop_patients_with_missing_ground_truth: bool = True,
 ) -> None:
     """Deploy categorical model(s) and save predictions.
@@ -94,6 +100,44 @@ def deploy_categorical_model_(
     if len(tasks) != 1:
         raise RuntimeError(f"Mixed tasks in ensemble: {tasks}")
     task = tasks.pop()
+    model_name = cast(str, models[0].hparams["model_name"])
+
+    trained_marker_subsets = {
+        tuple(cast(Sequence[str], m.hparams.get("selected_markers") or []))
+        for m in models
+    }
+    if len(trained_marker_subsets) != 1:
+        raise RuntimeError(
+            f"selected_markers differ between models: {trained_marker_subsets}"
+        )
+    trained_selected_markers = next(iter(trained_marker_subsets))
+    config_selected_markers = normalize_selected_markers(selected_markers)
+    if config_selected_markers is not None:
+        if (
+            trained_selected_markers
+            and config_selected_markers != trained_selected_markers
+        ):
+            raise RuntimeError(
+                "deployment selected_markers differs from the marker subset saved in the checkpoint: "
+                f"{config_selected_markers} vs {trained_selected_markers}"
+            )
+        if not trained_selected_markers and model_name == "marker_fusion":
+            raise RuntimeError(
+                "deployment selected_markers was provided, but the checkpoint was not "
+                "trained with a marker subset. Please deploy with the original marker configuration."
+            )
+
+    resolved_selected_markers = (
+        config_selected_markers
+        if config_selected_markers is not None
+        else (trained_selected_markers or None)
+    )
+    feature_dataset_name, resolved_selected_markers = resolve_marker_loading_config(
+        feature_dataset_name=feature_dataset_name,
+        selected_markers=resolved_selected_markers,
+        model_name=model_name,
+        context="deployment",
+    )
 
     # Feature type consistency
     model_supported = models[0].hparams["supported_features"]
@@ -271,6 +315,8 @@ def deploy_categorical_model_(
         num_workers=num_workers,
         transform=None,
         categories=model_categories,
+        feature_dataset_name=feature_dataset_name,
+        selected_markers=resolved_selected_markers,
     )
 
     df_builder = {

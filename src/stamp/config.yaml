@@ -59,6 +59,13 @@ crossval:
 
   # Directory the extracted features are saved in.
   feature_dir: "/path/your/extracted/features/are/stored/in"
+  # Optional: choose which HDF5 dataset to read from each file.
+  #feature_dataset_name: "marker_embeddings"
+  # Optional marker subset for multiplex marker-aware training.
+  # Matched against the HDF5 root attribute "marker_names".
+  # When used with model_name: "marker_fusion", "auto" will load marker_embeddings.
+  #selected_markers: "PanCK"
+  #selected_markers: ["PanCK", "HER2"]
 
   # A table (.xlsx or .csv) relating every patient to their feature files.
   # The table must contain at least two columns,
@@ -117,6 +124,13 @@ training:
 
   # Directory the extracted features are saved in.
   feature_dir: "/path/your/extracted/features/are/stored/in"
+  # Optional: choose which HDF5 dataset to read from each file.
+  #feature_dataset_name: "marker_embeddings"
+  # Optional marker subset for multiplex marker-aware training.
+  # Matched against the HDF5 root attribute "marker_names".
+  # When used with model_name: "marker_fusion", "auto" will load marker_embeddings.
+  #selected_markers: "PanCK"
+  #selected_markers: ["PanCK", "HER2"]
 
   # A table (.xlsx or .csv) relating every patient to their feature files.
   # The table must contain at least two columns,
@@ -169,6 +183,12 @@ deployment:
 
   # Directory the extracted features are saved in.
   feature_dir: "/path/your/extracted/features/are/stored/in"
+  # Optional: choose which HDF5 dataset to read from each file.
+  #feature_dataset_name: "marker_embeddings"
+  # Optional marker subset for multiplex marker-aware deployment.
+  # Matched against the HDF5 root attribute "marker_names".
+  #selected_markers: "PanCK"
+  #selected_markers: ["PanCK", "HER2"]
 
   # A table (.xlsx or .csv) relating every patient to their feature files.
   # The table must contain at least two columns, one titled "PATIENT",
@@ -199,6 +219,31 @@ deployment:
   # This is especially handy to e.g. combine the models from a cross-validation.
   #- "/path/to/model2.ckpt"
   #- "/path/to/model3.ckpt"
+
+explainability:
+  output_dir: "/path/to/save/files/to"
+  feature_dir: "/path/your/extracted/features/are/stored/in"
+  checkpoint_path: "/path/to/model.ckpt"
+
+  # Optional: choose which HDF5 dataset to read from each file.
+  feature_dataset_name: "marker_embeddings"
+
+  # Optional subset of feature files to process
+  #feature_paths:
+  #- "slide_a.h5"
+  #- "slide_b.h5"
+
+  # Optional: for classification, explain this class index.
+  # If omitted, STAMP explains the predicted class for each slide.
+  #class_index: 1
+
+  # Optional override for marker names used in exported CSVs.
+  # If omitted, STAMP reads the HDF5 root attribute "marker_names" and
+  # aligns to the marker subset stored in the checkpoint, if any.
+  #marker_names: ["marker_0", "marker_1", "marker_2", "marker_3", "marker_4", "marker_5", "marker_6"]
+
+  # Save tile-by-marker saliency tensors
+  export_tile_saliency: true
 
 
 statistics:

@@ -237,6 +237,59 @@ we can run it by invoking:
 stamp --config stamp-test-experiment/config.yaml crossval
 ```
 
+### Multiplex Marker Selection
+
+For multiplex `.h5` feature files, STAMP can train marker-aware models directly
+from per-marker embeddings.
+If your files contain:
+
+- a dataset `marker_embeddings` with shape `(tiles, markers, features)`, and
+- an HDF5 root attribute `marker_names`,
+
+you can train `marker_fusion` on either all markers or only a selected subset.
+
+For example, if your `.h5` files contain:
+
+```text
+marker_names = ["DAPI", "cMET", "PanCK", "DLL3", "Prame", "HER2", "Trop2"]
+```
+
+you can configure cross-validation like this:
+
+```yaml
+crossval:
+  output_dir: "/absolute/path/to/stamp-test-experiment"
+  clini_table: "/absolute/path/to/clini.csv"
+  feature_dir: "/absolute/path/to/multiplex/features"
+  slide_table: "/absolute/path/to/slide.csv"
+  ground_truth_label: "KRAS"
+
+  # Optional but recommended for multiplex marker-aware training
+  feature_dataset_name: "marker_embeddings"
+
+  # Train on one marker:
+  # selected_markers: "PanCK"
+
+  # Or train on a subset of markers:
+  selected_markers: ["PanCK", "HER2"]
+
+advanced_config:
+  model_name: "marker_fusion"
+```
+
+Notes:
+
+- `selected_markers` may be a single marker name or a list of marker names.
+- Marker names are matched against the HDF5 `marker_names` attribute.
+- If `selected_markers` is used with `model_name: "marker_fusion"` and
+  `feature_dataset_name: "auto"`, STAMP will automatically load
+  `marker_embeddings`.
+- Deployment reuses the marker subset saved in the checkpoint, so inference stays
+  consistent with training.
+- Explainability also reuses the marker subset saved in the checkpoint. Marker
+  labels are read from the `.h5` `marker_names` attribute by default, then
+  aligned to the checkpoint subset order.
+
 
 ## Generating Statistics
 
@@ -485,6 +538,65 @@ heatmaps:
         ├── top_02-slide-name-class=score.jpg
         └── bottom_01-slide-name-class=score.jpg # Lowest scoring tiles
   ```
+
+## Explainability for Multiplex Marker Models
+
+The `stamp explainability` command generates marker-level outputs for multiplex
+feature files. This is intended for marker-aware models such as
+`marker_fusion`, where each `.h5` file contains per-marker embeddings in the
+`marker_embeddings` dataset.
+
+For explainability, STAMP expects multiplex `.h5` files to contain:
+
+- a dataset `marker_embeddings` with shape `(tiles, markers, features)`, and
+- an HDF5 root attribute `marker_names`
+
+The configuration can look like this:
+
+```yaml
+# stamp-test-experiment/config.yaml
+
+explainability:
+  output_dir: "/absolute/path/to/stamp-test-experiment/explainability"
+  feature_dir: "/absolute/path/to/multiplex/features"
+  checkpoint_path: "/absolute/path/to/stamp-test-experiment/model.ckpt"
+
+  # Optional: choose which HDF5 dataset to read
+  feature_dataset_name: "marker_embeddings"
+
+  # Optional: only explain a subset of feature files
+  #feature_paths:
+  #- "slide_a.h5"
+  #- "slide_b.h5"
+
+  # Optional: for classification, explain this class index.
+  # If omitted, STAMP explains the predicted class for each slide.
+  #class_index: 1
+
+  # Optional manual label override. Usually not needed.
+  #marker_names: ["DAPI", "PanCK", "HER2"]
+
+  export_tile_saliency: true
+  device: "cuda"
+```
+
+Run:
+
+```sh
+stamp --config stamp-test-experiment/config.yaml explainability
+```
+
+Behavior notes:
+
+- If `marker_names` is omitted in the config, STAMP reads marker labels from
+  the `.h5` `marker_names` attribute.
+- If the checkpoint was trained with `selected_markers`, explainability uses
+  that saved marker subset automatically and keeps the checkpoint order.
+- Because of that, you usually do not need to repeat marker names or marker
+  subsets in the explainability config.
+- If a subset-trained checkpoint is used, the `.h5` files still need
+  `marker_names` so STAMP can map the checkpoint subset back to the stored
+  markers.
 
 
 ## Advanced configuration

@@ -22,6 +22,7 @@ class ModelName(StrEnum):
     MLP = "mlp"
     TRANS_MIL = "trans_mil"
     LINEAR = "linear"
+    MARKER_FUSION = "marker_fusion"
     BARSPOON = "barspoon"
 
 
@@ -67,6 +68,11 @@ def load_model_class(task: Task, feature_type: str, model_name: ModelName):
         case ModelName.LINEAR:
             from stamp.modeling.models.mlp import (
                 Linear as ModelClass,
+            )
+
+        case ModelName.MARKER_FUSION:
+            from stamp.modeling.models.marker_fusion import (
+                MarkerFusion as ModelClass,
             )
 
         case _:

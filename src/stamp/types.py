@@ -46,8 +46,12 @@ Category: TypeAlias = str
 
 BagSize: TypeAlias = int
 
-# A batch of the above
-Bags: TypeAlias = Float[Tensor, "batch tile feature"]
+# A batch of the above. Standard tile bags are [batch, tile, feature].
+# Marker-aware multiplex bags may carry an extra marker axis:
+# [batch, tile, marker, feature].
+Bags: TypeAlias = (
+    Float[Tensor, "batch tile feature"] | Float[Tensor, "batch tile marker feature"]
+)
 BagSizes: TypeAlias = Integer[Tensor, "batch"]  # noqa: F821
 EncodedTargets: TypeAlias = (
     Float[Tensor, "index category_is_hot"] | Float[Tensor, "index 1"]

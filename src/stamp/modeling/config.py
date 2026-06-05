@@ -25,6 +25,21 @@ class TrainConfig(BaseModel):
         default=None, description="Excel or CSV to read patient-slide associations from"
     )
     feature_dir: Path = Field(description="Directory containing feature files")
+    feature_dataset_name: str = Field(
+        default="auto",
+        description=(
+            "Name of the HDF5 dataset to read from each feature file. "
+            "Use 'auto' to keep the current behavior (prefer 'feats', then 'patch_embeddings')."
+        ),
+    )
+    selected_markers: str | Sequence[str] | None = Field(
+        default=None,
+        description=(
+            "Optional marker subset for marker-aware multiplex training. "
+            "Can be a single marker name or a list of names matched against "
+            "the HDF5 'marker_names' attribute."
+        ),
+    )
 
     ground_truth_label: PandasLabel | Sequence[PandasLabel] | None = Field(
         default=None,
@@ -72,6 +87,15 @@ class DeploymentConfig(BaseModel):
     clini_table: Path | None = None
     slide_table: Path
     feature_dir: Path
+    feature_dataset_name: str = "auto"
+    selected_markers: str | Sequence[str] | None = Field(
+        default=None,
+        description=(
+            "Optional marker subset for marker-aware multiplex deployment. "
+            "Can be a single marker name or a list of names matched against "
+            "the HDF5 'marker_names' attribute."
+        ),
+    )
 
     ground_truth_label: PandasLabel | Sequence[PandasLabel] | None = None
     patient_label: PandasLabel = "PATIENT"
@@ -137,18 +161,34 @@ class LinearModelParams(BaseModel):
     learning_rate: float = 1e-4
 
 
+class MarkerFusionModelParams(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    n_markers: int = 7
+    marker_feature_dim: int | None = None
+    dim_model: int = 192
+    n_layers: int = 2
+    n_heads: int = 4
+    dim_feedforward: int = 384
+    dropout: float = 0.1
+    use_alibi: bool = False
+
+
 class ModelParams(BaseModel):
     model_config = ConfigDict(extra="forbid")
     vit: VitModelParams = Field(default_factory=VitModelParams)
     trans_mil: TransMILModelParams = Field(default_factory=TransMILModelParams)
     mlp: MlpModelParams = Field(default_factory=MlpModelParams)
     linear: LinearModelParams = Field(default_factory=LinearModelParams)
+    marker_fusion: MarkerFusionModelParams = Field(
+        default_factory=MarkerFusionModelParams
+    )
     barspoon: BarspoonParams = Field(default_factory=BarspoonParams)
 
 
 class AdvancedConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     bag_size: int = 512
+    prefetch_bag_size: int | None = None
     num_workers: int = min(os.cpu_count() or 1, 16)
     batch_size: int = 64
     max_epochs: int = 32

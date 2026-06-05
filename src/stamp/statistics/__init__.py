@@ -30,9 +30,8 @@ from stamp.statistics.roc import (
 )
 from stamp.statistics.survival import _plot_km, _survival_stats_for_csv
 from stamp.types import PandasLabel, Task
-from stamp.utils.path import path_safe
 
-__all__ = ["StatsConfig", "compute_stats_", "path_safe"]
+__all__ = ["StatsConfig", "compute_stats_"]
 
 
 __author__ = "Marko van Treeck, Minh Duc Nguyen"
@@ -147,9 +146,7 @@ def _compute_multitarget_classification_stats(
                 )
 
             fig.tight_layout()
-            fig.savefig(
-                output_dir / f"roc-curve_{path_safe(target_label)}={true_class}.svg"
-            )
+            fig.savefig(output_dir / f"roc-curve_{target_label}={true_class}.svg")
             plt.close(fig)
 
             # Plot PRC curve
@@ -175,9 +172,7 @@ def _compute_multitarget_classification_stats(
                 )
 
             fig.tight_layout()
-            fig.savefig(
-                output_dir / f"pr-curve_{path_safe(target_label)}={true_class}.svg"
-            )
+            fig.savefig(output_dir / f"pr-curve_{target_label}={true_class}.svg")
             plt.close(fig)
 
     # Compute aggregated statistics for all targets
@@ -297,8 +292,7 @@ def compute_stats_(
                 fig.tight_layout()
                 output_dir.mkdir(parents=True, exist_ok=True)
                 fig.savefig(
-                    output_dir
-                    / f"roc-curve_{path_safe(ground_truth_label)}={true_class}.svg"
+                    output_dir / f"roc-curve_{ground_truth_label}={true_class}.svg"
                 )
                 plt.close(fig)
 
@@ -327,8 +321,7 @@ def compute_stats_(
 
                 fig.tight_layout()
                 fig.savefig(
-                    output_dir
-                    / f"pr-curve_{path_safe(ground_truth_label)}={true_class}.svg"
+                    output_dir / f"pr-curve_{ground_truth_label}={true_class}.svg"
                 )
                 plt.close(fig)
 

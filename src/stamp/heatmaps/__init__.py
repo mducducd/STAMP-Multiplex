@@ -7,14 +7,13 @@ os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 import logging
 from collections.abc import Collection, Iterable
 from pathlib import Path
-from typing import cast
+from typing import List, Optional, Tuple, cast
 
 import h5py
 import matplotlib.pyplot as plt
 import numpy as np
 import openslide
 import torch
-from beartype.typing import List, Optional, Tuple
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 from matplotlib.patches import Patch
@@ -366,12 +365,19 @@ def heatmaps_(
             feats_np = np.asarray(h5["feats"])
             feats = torch.from_numpy(feats_np).float().to(device)
             coords_info = get_coords(h5)
-            coords_um = torch.from_numpy(coords_info.coords_um).float()
-            stride_um = Microns(get_stride(coords_um))
-
-            tile_size_slide_px = TilePixels(
-                int(round(float(coords_info.tile_size_um) / slide_mpp))
-            )
+            if coords_info.tile_size_um == 0.0 and coords_info.tile_size_px:
+                # Multiplex h5: coords_info.coords_um currently holds slide pixels.
+                # Convert to µm using slide_mpp, and use tile_size_px as the stride.
+                tile_size_um_val = float(coords_info.tile_size_px) * slide_mpp
+                coords_um = torch.from_numpy(coords_info.coords_um).float() * slide_mpp
+                stride_um = Microns(tile_size_um_val)
+                tile_size_slide_px = TilePixels(int(coords_info.tile_size_px))
+            else:
+                coords_um = torch.from_numpy(coords_info.coords_um).float()
+                stride_um = Microns(get_stride(coords_um))
+                tile_size_slide_px = TilePixels(
+                    int(round(float(coords_info.tile_size_um) / slide_mpp))
+                )
 
         # grid coordinates, i.e. the top-left most tile is (0, 0), the one to its right (0, 1) etc.
         coords_norm = (coords_um / stride_um).round().long()

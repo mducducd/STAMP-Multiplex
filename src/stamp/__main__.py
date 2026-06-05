@@ -181,6 +181,8 @@ def _run_cli(args: argparse.Namespace) -> None:
                 clini_table=config.deployment.clini_table,
                 slide_table=config.deployment.slide_table,
                 feature_dir=config.deployment.feature_dir,
+                feature_dataset_name=config.deployment.feature_dataset_name,
+                selected_markers=config.deployment.selected_markers,
                 patient_label=config.deployment.patient_label,
                 filename_label=config.deployment.filename_label,
                 drop_patients_with_missing_ground_truth=(
@@ -260,6 +262,29 @@ def _run_cli(args: argparse.Namespace) -> None:
                 opacity=config.heatmaps.opacity,
             )
 
+        case "explainability":
+            from stamp.explainability import explain_slides_
+
+            if config.explainability is None:
+                raise ValueError("no explainability configuration supplied")
+
+            _add_file_handle_(_logger, output_dir=config.explainability.output_dir)
+            _logger.info(
+                "using the following configuration:\n"
+                f"{yaml.dump(config.explainability.model_dump(mode='json'))}"
+            )
+            explain_slides_(
+                feature_dir=config.explainability.feature_dir,
+                checkpoint_path=config.explainability.checkpoint_path,
+                output_dir=config.explainability.output_dir,
+                feature_paths=config.explainability.feature_paths,
+                dataset_name=config.explainability.feature_dataset_name,
+                class_index=config.explainability.class_index,
+                marker_names=config.explainability.marker_names,
+                export_tile_saliency=config.explainability.export_tile_saliency,
+                device=config.explainability.device,
+            )
+
         case _:
             raise RuntimeError(
                 "unreachable: the argparser should only allow valid commands"
@@ -319,6 +344,10 @@ def main() -> None:
     )
     commands.add_parser("config", help="Print the loaded configuration")
     commands.add_parser("heatmaps", help="Generate heatmaps for a trained model")
+    commands.add_parser(
+        "explainability",
+        help="Generate marker-level explainability outputs for test-slide features",
+    )
 
     args = parser.parse_args()
 

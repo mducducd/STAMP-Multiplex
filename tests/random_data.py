@@ -477,6 +477,30 @@ def make_feature_file(
     return file
 
 
+def make_marker_feature_file(
+    *,
+    marker_embeddings: Float[Tensor, "tile marker feat_d"],
+    coords: Float[Tensor, "tile 2"],
+    marker_names: list[str],
+    tile_size_um: Microns = Microns(2508),
+    tile_size_px: TilePixels = TilePixels(512),
+) -> io.BytesIO:
+    """Creates a tile-level marker-aware feature file from the given data."""
+    file = io.BytesIO()
+    with h5py.File(file, "w") as h5:
+        h5["marker_embeddings"] = marker_embeddings
+        h5["coords"] = coords * tile_size_um
+        h5.attrs["stamp_version"] = stamp.__version__
+        h5.attrs["extractor"] = "random-test-generator"
+        h5.attrs["unit"] = "um"
+        h5.attrs["tile_size_um"] = tile_size_um
+        h5.attrs["tile_size_px"] = tile_size_px
+        h5.attrs["feat_type"] = "tile"
+        h5.attrs["marker_names"] = marker_names
+
+    return file
+
+
 def make_patient_level_feature_file(
     *,
     feats: torch.Tensor,
@@ -499,6 +523,31 @@ def make_patient_level_feature_file(
         h5.attrs["stamp_version"] = version
         h5.attrs["code_hash"] = code_hash
         h5.attrs["feat_type"] = "patient"
+    file.seek(0)
+    return file
+
+
+def make_patient_level_marker_feature_file(
+    *,
+    marker_embeddings: torch.Tensor,
+    marker_names: list[str],
+    encoder: str = "test-encoder",
+    precision: str = "float32",
+    code_hash: str = "testhash",
+    version: str | None = None,
+) -> io.BytesIO:
+    """Creates an in-memory patient-level marker-aware feature file."""
+    version = version or stamp.__version__
+    file = io.BytesIO()
+    with h5py.File(file, "w") as h5:
+        h5["marker_embeddings"] = marker_embeddings.numpy()
+        h5.attrs["version"] = version
+        h5.attrs["encoder"] = encoder
+        h5.attrs["precision"] = precision
+        h5.attrs["stamp_version"] = version
+        h5.attrs["code_hash"] = code_hash
+        h5.attrs["feat_type"] = "patient"
+        h5.attrs["marker_names"] = marker_names
     file.seek(0)
     return file
 

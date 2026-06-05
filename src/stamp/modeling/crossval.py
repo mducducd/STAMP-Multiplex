@@ -15,6 +15,10 @@ from stamp.modeling.data import (
     load_patient_data_,
     log_patient_class_summary,
 )
+from stamp.modeling.markers import (
+    normalize_selected_markers,
+    resolve_marker_loading_config,
+)
 from stamp.modeling.deploy import (
     _predict,
     _to_prediction_df,
@@ -22,7 +26,11 @@ from stamp.modeling.deploy import (
     _to_survival_prediction_df,
     load_model_from_ckpt,
 )
-from stamp.modeling.train import setup_model_from_dataloaders, train_model_
+from stamp.modeling.train import (
+    infer_feature_dimensions_from_batch,
+    setup_model_from_dataloaders,
+    train_model_,
+)
 from stamp.modeling.transforms import VaryPrecisionTransform
 from stamp.types import (
     GroundTruth,
@@ -69,6 +77,15 @@ def categorical_crossval_(
         ),
     )
     _logger.info(f"Detected feature type: {feature_type}")
+
+    feature_dataset_name, selected_markers = resolve_marker_loading_config(
+        feature_dataset_name=config.feature_dataset_name,
+        selected_markers=config.selected_markers,
+        model_name=advanced.model_name.value
+        if advanced.model_name is not None
+        else None,
+        context="crossval",
+    )
 
     patient_to_ground_truth = {
         pid: pd.ground_truth for pid, pd in patient_to_data.items()
@@ -232,32 +249,36 @@ def categorical_crossval_(
                 task=config.task,
                 patient_data=train_patient_data,
                 bag_size=advanced.bag_size,
+                prefetch_bag_size=advanced.prefetch_bag_size,
                 batch_size=advanced.batch_size,
                 shuffle=True,
                 num_workers=advanced.num_workers,
                 transform=train_transform,
                 categories=fold_categories,
+                feature_dataset_name=feature_dataset_name,
+                selected_markers=selected_markers,
             )
             test_dl, _ = create_dataloader(
                 feature_type=feature_type,
                 task=config.task,
                 patient_data=test_patient_data,
-                bag_size=None,
+                bag_size=advanced.bag_size if feature_type == "tile" else None,
+                prefetch_bag_size=advanced.prefetch_bag_size,
                 batch_size=1,
                 shuffle=False,
                 num_workers=advanced.num_workers,
                 transform=None,
                 categories=train_categories,
+                feature_dataset_name=feature_dataset_name,
+                selected_markers=selected_markers,
             )
 
             # Infer feature dimension
             batch = next(iter(train_dl))
-            if feature_type == "tile":
-                bags, _, _, _ = batch
-                dim_feats = bags.shape[-1]
-            else:
-                feats, _ = batch
-                dim_feats = feats.shape[-1]
+            dim_feats, marker_count = infer_feature_dimensions_from_batch(
+                batch=batch,
+                feature_type=feature_type,
+            )
 
             model = setup_model_from_dataloaders(
                 train_dl=train_dl,
@@ -275,6 +296,9 @@ def categorical_crossval_(
                 clini_table=config.clini_table,
                 slide_table=config.slide_table,
                 feature_dir=config.feature_dir,
+                feature_dataset_name=feature_dataset_name,
+                selected_markers=selected_markers,
+                marker_count=marker_count,
             )
             model = train_model_(
                 output_dir=split_dir,
@@ -293,6 +317,13 @@ def categorical_crossval_(
 
         # Deploy on test fold (used as validation/prediction set)
         if not (split_dir / "patient-preds.csv").exists():
+            prediction_selected_markers = normalize_selected_markers(
+                getattr(model.hparams, "selected_markers", None)
+            )
+            prediction_feature_dataset_name = cast(
+                str,
+                getattr(model.hparams, "feature_dataset_name", feature_dataset_name),
+            )
             # Prepare validation dataloader for predictions
             test_patients = [
                 pid for pid in split.test_patients if pid in patient_to_data
@@ -302,12 +333,15 @@ def categorical_crossval_(
                 feature_type=feature_type,
                 task=config.task,
                 patient_data=test_patient_data,
-                bag_size=None,
+                bag_size=advanced.bag_size if feature_type == "tile" else None,
+                prefetch_bag_size=advanced.prefetch_bag_size,
                 batch_size=1,
                 shuffle=False,
                 num_workers=advanced.num_workers,
                 transform=None,
                 categories=categories,
+                feature_dataset_name=prediction_feature_dataset_name,
+                selected_markers=prediction_selected_markers,
             )
 
             predictions = _predict(

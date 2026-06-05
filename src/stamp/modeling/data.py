@@ -32,6 +32,10 @@ from torch import Tensor
 from torch.utils.data import DataLoader, Dataset
 
 import stamp
+from stamp.modeling.markers import (
+    normalize_selected_markers,
+    resolve_selected_marker_indices,
+)
 from stamp.types import (
     Bags,
     BagSize,
@@ -52,6 +56,7 @@ from stamp.types import (
 from stamp.utils.seed import Seed
 
 _logger = logging.getLogger("stamp")
+_AUTO_FEATURE_DATASET_NAME = "auto"
 
 
 __author__ = "Marko van Treeck, Minh Duc Nguyen"
@@ -86,12 +91,15 @@ def tile_bag_dataloader(
     *,
     patient_data: Sequence[PatientData[GroundTruth | None | dict]],
     bag_size: int | None,
+    prefetch_bag_size: int | None,
     task: Task,
     categories: Sequence[Category] | None = None,
     batch_size: int,
     shuffle: bool,
     num_workers: int,
     transform: Callable[[Tensor], Tensor] | None,
+    feature_dataset_name: str = _AUTO_FEATURE_DATASET_NAME,
+    selected_markers: Sequence[str] | None = None,
 ) -> tuple[
     DataLoader[tuple[Bags, CoordinatesBatch, BagSizes, EncodedTargets]],
     Sequence[Category] | Mapping[str, Sequence[Category]],
@@ -120,9 +128,12 @@ def tile_bag_dataloader(
     ds = BagDataset(
         bags=[patient.feature_files for patient in patient_data],
         bag_size=bag_size,
+        prefetch_bag_size=prefetch_bag_size,
         ground_truths=targets,
         transform=transform,
         deterministic=(not shuffle),
+        feature_dataset_name=feature_dataset_name,
+        selected_markers=selected_markers,
     )
     dl = DataLoader(
         ds,
@@ -303,6 +314,8 @@ def patient_feature_dataloader(
     shuffle: bool,
     num_workers: int,
     transform: Callable[[Tensor], Tensor] | None,
+    feature_dataset_name: str = _AUTO_FEATURE_DATASET_NAME,
+    selected_markers: Sequence[str] | None = None,
 ) -> tuple[DataLoader, Sequence[Category]]:
     """
     Creates a dataloader for patient-level features (one feature vector per patient).
@@ -313,14 +326,14 @@ def patient_feature_dataloader(
         categories if categories is not None else list(np.unique(raw_ground_truths))
     )
     one_hot = torch.tensor(raw_ground_truths.reshape(-1, 1) == categories)
-    ds = PatientFeatureDataset(feature_files, one_hot, transform=transform)
-    dl = DataLoader(
-        ds,
-        batch_size=batch_size,
-        shuffle=shuffle,
-        num_workers=num_workers,
-        persistent_workers=(num_workers > 0),
+    ds = PatientFeatureDataset(
+        feature_files,
+        one_hot,
+        transform=transform,
+        feature_dataset_name=feature_dataset_name,
+        selected_markers=selected_markers,
     )
+    dl = DataLoader(ds, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers)
     return dl, categories
 
 
@@ -330,11 +343,14 @@ def create_dataloader(
     task: Task,
     patient_data: Sequence[PatientData[GroundTruth | None | dict]],
     bag_size: int | None = None,
+    prefetch_bag_size: int | None = None,
     batch_size: int,
     shuffle: bool,
     num_workers: int,
     transform: Callable[[Tensor], Tensor] | None,
     categories: Sequence[Category] | Mapping[str, Sequence[Category]] | None = None,
+    feature_dataset_name: str = _AUTO_FEATURE_DATASET_NAME,
+    selected_markers: Sequence[str] | None = None,
 ) -> tuple[DataLoader, Sequence[Category] | Mapping[str, Sequence[Category]]]:
     """Unified dataloader for all feature types and tasks."""
     if feature_type == "tile":
@@ -351,12 +367,15 @@ def create_dataloader(
         return tile_bag_dataloader(
             patient_data=patient_data,
             bag_size=bag_size,
+            prefetch_bag_size=prefetch_bag_size,
             task=task,
             categories=cats_arg,
             batch_size=batch_size,
             shuffle=shuffle,
             num_workers=num_workers,
             transform=transform,
+            feature_dataset_name=feature_dataset_name,
+            selected_markers=selected_markers,
         )
     elif feature_type in {"slide", "patient"}:
         # For slide/patient-level: single feature vector per entry
@@ -413,7 +432,13 @@ def create_dataloader(
         else:
             raise ValueError(f"Unsupported task: {task}")
 
-        ds = PatientFeatureDataset(feature_files, labels, transform)
+        ds = PatientFeatureDataset(
+            feature_files,
+            labels,
+            transform,
+            feature_dataset_name=feature_dataset_name,
+            selected_markers=selected_markers,
+        )
         dl = DataLoader(
             ds,
             batch_size=batch_size,
@@ -544,8 +569,8 @@ class BagDataset(Dataset[tuple[_Bag, _Coordinates, BagSize, _EncodedTarget]]):
     """The `.h5` files containing the bags.
 
     Each bag consists of the features taken from one or multiple h5 files.
-    Each of the h5 files needs to have a dataset called `feats` of shape N x F,
-    where N is the number of instances and F the number of features per instance.
+    Each of the h5 files needs to have a configured feature dataset of shape
+    N x ..., where N is the number of instances/tiles.
     """
 
     bag_size: BagSize | None = None
@@ -556,6 +581,8 @@ class BagDataset(Dataset[tuple[_Bag, _Coordinates, BagSize, _EncodedTarget]]):
     Smaller bags are padded with zeros.
     If `bag_size` is None, all the samples will be used.
     """
+    prefetch_bag_size: BagSize | None = None
+    """Optional cap for the number of tiles loaded before bag sampling."""
 
     ground_truths: Tensor | list[dict[str, Tensor]]
 
@@ -564,17 +591,23 @@ class BagDataset(Dataset[tuple[_Bag, _Coordinates, BagSize, _EncodedTarget]]):
 
     transform: Callable[[Tensor], Tensor] | None
     deterministic: bool = False
+    feature_dataset_name: str = _AUTO_FEATURE_DATASET_NAME
+    selected_markers: Sequence[str] | None = None
 
     def __post_init__(self) -> None:
         if len(self.bags) != len(self.ground_truths):
             raise ValueError(
                 "the number of ground truths has to match the number of bags"
             )
+        self.selected_markers = normalize_selected_markers(self.selected_markers)
         # Initialise per-worker HDF5 handle cache here so __getitem__ avoids
         # a hasattr() call on every tile read.
         self._h5_handle_cache: OrderedDict[FeaturePath | _BinaryIOLike, h5py.File] = (
             OrderedDict()
         )
+        self._marker_index_cache: dict[
+            FeaturePath | _BinaryIOLike, np.ndarray | None
+        ] = {}
 
     def __getstate__(self) -> dict:
         # h5py file handles cannot be pickled (required when DataLoader uses
@@ -582,61 +615,182 @@ class BagDataset(Dataset[tuple[_Bag, _Coordinates, BagSize, _EncodedTarget]]):
         # files lazily on the first __getitem__ access.
         state = self.__dict__.copy()
         state["_h5_handle_cache"] = OrderedDict()
+        state["_marker_index_cache"] = {}
         return state
 
     def __len__(self) -> int:
         return len(self.bags)
 
+    @staticmethod
+    def _feature_dataset(
+        h5: h5py.File, feature_dataset_name: str = _AUTO_FEATURE_DATASET_NAME
+    ) -> h5py.Dataset:
+        if feature_dataset_name == _AUTO_FEATURE_DATASET_NAME:
+            dataset_name = "feats" if "feats" in h5 else "patch_embeddings"
+        else:
+            dataset_name = feature_dataset_name
+            if dataset_name not in h5:
+                raise KeyError(
+                    f"{h5.filename}: dataset '{dataset_name}' not found. "
+                    f"Available datasets: {list(h5.keys())}"
+                )
+        dataset = h5[dataset_name]
+        if not isinstance(dataset, h5py.Dataset):
+            raise RuntimeError(
+                f"expected '{dataset_name}' to be an HDF5 dataset but got {type(dataset)}"
+            )
+        return dataset
+
+    def _get_h5(self, bag_file: FeaturePath | _BinaryIOLike) -> h5py.File:
+        if bag_file not in self._h5_handle_cache:
+            if len(self._h5_handle_cache) >= 128:
+                _, h = self._h5_handle_cache.popitem(last=False)
+                h.close()
+
+            try:
+                self._h5_handle_cache[bag_file] = h5py.File(
+                    bag_file, "r", swmr=True, libver="latest"
+                )
+            except Exception:
+                self._h5_handle_cache[bag_file] = h5py.File(bag_file, "r")
+        else:
+            self._h5_handle_cache.move_to_end(bag_file)
+
+        return self._h5_handle_cache[bag_file]
+
+    def _read_coords_slice(
+        self, h5: h5py.File, start: int = 0, stop: int | None = None
+    ) -> Tensor:
+        feature_count = self._feature_dataset(h5, self.feature_dataset_name).shape[0]
+        stop = feature_count if stop is None else stop
+
+        if "coords" in h5:
+            coords_obj = h5["coords"]
+            if not isinstance(coords_obj, h5py.Dataset):
+                raise RuntimeError(
+                    f"{h5.filename}: expected 'coords' to be an HDF5 dataset but got {type(coords_obj)}"
+                )
+            return torch.from_numpy(np.asarray(coords_obj[start:stop])).float()
+
+        if "coord_x" in h5 and "coord_y" in h5:
+            coord_x = np.asarray(h5["coord_x"][start:stop], dtype=np.float32)
+            coord_y = np.asarray(h5["coord_y"][start:stop], dtype=np.float32)
+            return torch.from_numpy(np.column_stack((coord_x, coord_y))).float()
+
+        xs = np.arange(start, stop, dtype=np.float32)
+        ys = np.zeros(stop - start, dtype=np.float32)
+        return torch.from_numpy(np.column_stack((xs, ys))).float()
+
+    def _marker_indices(
+        self, *, bag_file: FeaturePath | _BinaryIOLike, h5: h5py.File
+    ) -> np.ndarray | None:
+        if bag_file not in self._marker_index_cache:
+            dataset = self._feature_dataset(h5, self.feature_dataset_name)
+            self._marker_index_cache[bag_file] = resolve_selected_marker_indices(
+                h5=h5,
+                dataset_name=dataset.name.rsplit("/", maxsplit=1)[-1],
+                dataset_ndim=dataset.ndim,
+                selected_markers=self.selected_markers,
+            )
+        return self._marker_index_cache[bag_file]
+
+    def _read_feature_slice(
+        self,
+        *,
+        bag_file: FeaturePath | _BinaryIOLike,
+        h5: h5py.File,
+        start: int = 0,
+        stop: int | None = None,
+    ) -> np.ndarray:
+        dataset = self._feature_dataset(h5, self.feature_dataset_name)
+        feature_slice = np.asarray(
+            dataset[start:stop] if stop is not None else dataset[()]
+        )
+
+        if (
+            marker_indices := self._marker_indices(bag_file=bag_file, h5=h5)
+        ) is not None:
+            feature_slice = feature_slice[:, marker_indices, ...]
+
+        return feature_slice
+
+    def _read_full_bag(
+        self, bag_files: Sequence[FeaturePath | _BinaryIOLike]
+    ) -> tuple[Tensor, Tensor]:
+        feats = []
+        coords_um = []
+        for bag_file in bag_files:
+            h5 = self._get_h5(bag_file)
+            feats.append(
+                torch.from_numpy(self._read_feature_slice(bag_file=bag_file, h5=h5))
+            )
+            coords_um.append(self._read_coords_slice(h5))
+
+        return torch.concat(feats).float(), torch.concat(coords_um).float()
+
+    def _read_prefetched_bag(
+        self, bag_files: Sequence[FeaturePath | _BinaryIOLike]
+    ) -> tuple[Tensor, Tensor]:
+        file_sizes = []
+        total_tiles = 0
+        for bag_file in bag_files:
+            h5 = self._get_h5(bag_file)
+            size = int(self._feature_dataset(h5, self.feature_dataset_name).shape[0])
+            file_sizes.append(size)
+            total_tiles += size
+
+        if total_tiles == 0:
+            raise RuntimeError("encountered an empty bag while loading tile features")
+
+        window_size = min(cast(int, self.prefetch_bag_size), total_tiles)
+        if window_size >= total_tiles:
+            return self._read_full_bag(bag_files)
+
+        max_start = total_tiles - window_size
+        start = (
+            0
+            if self.deterministic or max_start == 0
+            else int(torch.randint(max_start + 1, (1,)).item())
+        )
+        stop = start + window_size
+
+        feats = []
+        coords_um = []
+        offset = 0
+        for bag_file, file_size in zip(bag_files, file_sizes, strict=False):
+            local_start = max(start - offset, 0)
+            local_stop = min(stop - offset, file_size)
+            offset += file_size
+
+            if local_start >= local_stop:
+                continue
+
+            h5 = self._get_h5(bag_file)
+            feats.append(
+                torch.from_numpy(
+                    self._read_feature_slice(
+                        bag_file=bag_file,
+                        h5=h5,
+                        start=local_start,
+                        stop=local_stop,
+                    )
+                )
+            )
+            coords_um.append(self._read_coords_slice(h5, local_start, local_stop))
+
+            if offset >= stop:
+                break
+
+        return torch.concat(feats).float(), torch.concat(coords_um).float()
+
     def __getitem__(
         self, index: int
     ) -> tuple[_Bag, _Coordinates, BagSize, _EncodedTarget]:
-        # Collect all the features
-        feats = []
-        coords_um = []
-        for bag_file in self.bags[index]:
-            if bag_file not in self._h5_handle_cache:
-                # Limit open handles to avoid reaching OS ulimits
-                if len(self._h5_handle_cache) >= 128:
-                    _, h = self._h5_handle_cache.popitem(last=False)
-                    h.close()
-
-                try:
-                    # libver='latest' and swmr=True can provide better performance
-                    # on some network/HPC filesystems
-                    self._h5_handle_cache[bag_file] = h5py.File(
-                        bag_file, "r", swmr=True, libver="latest"
-                    )
-                except Exception:
-                    # Fallback for older HDF5 files or unconventional storage
-                    self._h5_handle_cache[bag_file] = h5py.File(bag_file, "r")
-            else:
-                # Move recently accessed file to end (mark as recently used)
-                self._h5_handle_cache.move_to_end(bag_file)
-
-            h5 = self._h5_handle_cache[bag_file]
-
-            if "feats" in h5:
-                feats_obj = h5["feats"]
-                if not isinstance(feats_obj, h5py.Dataset):
-                    raise RuntimeError(
-                        f"expected 'feats' to be an HDF5 dataset but got {type(feats_obj)}"
-                    )
-                arr = feats_obj[
-                    ()
-                ]  # uses [()] instead of [:] for clarity, both read entire dataset
-            else:
-                embeddings_obj = h5["patch_embeddings"]
-                if not isinstance(embeddings_obj, h5py.Dataset):
-                    raise RuntimeError(
-                        f"expected 'patch_embeddings' to be an HDF5 dataset but got {type(embeddings_obj)}"
-                    )
-                arr = embeddings_obj[()]  # your Kronos files
-
-            feats.append(torch.from_numpy(arr))
-            coords_um.append(torch.from_numpy(get_coords(h5).coords_um))
-
-        feats = torch.concat(feats).float()
-        coords_um = torch.concat(coords_um).float()
+        bag_files = tuple(self.bags[index])
+        if self.bag_size is not None and self.prefetch_bag_size is not None:
+            feats, coords_um = self._read_prefetched_bag(bag_files)
+        else:
+            feats, coords_um = self._read_full_bag(bag_files)
 
         if self.transform is not None:
             feats = self.transform(feats)
@@ -672,15 +826,22 @@ class PatientFeatureDataset(Dataset):
         feature_files: Sequence[FeaturePath | _BinaryIOLike],
         ground_truths: Tensor,  # shape: [num_samples, num_classes]
         transform: Callable[[Tensor], Tensor] | None,
+        feature_dataset_name: str = _AUTO_FEATURE_DATASET_NAME,
+        selected_markers: Sequence[str] | None = None,
     ):
         if len(feature_files) != len(ground_truths):
             raise ValueError("Number of feature files and ground truths must match.")
         self.feature_files = feature_files
         self.ground_truths = ground_truths
         self.transform = transform
+        self.feature_dataset_name = feature_dataset_name
+        self.selected_markers = normalize_selected_markers(selected_markers)
         # Initialise per-worker HDF5 handle cache eagerly so __getitem__ avoids
         # a hasattr() call on every sample read.
         self._h5_handle_cache: dict[FeaturePath | _BinaryIOLike, h5py.File] = {}
+        self._marker_index_cache: dict[
+            FeaturePath | _BinaryIOLike, np.ndarray | None
+        ] = {}
 
     def __getstate__(self) -> dict:
         # h5py file handles cannot be pickled (required when DataLoader uses
@@ -688,6 +849,7 @@ class PatientFeatureDataset(Dataset):
         # files lazily on the first __getitem__ access.
         state = self.__dict__.copy()
         state["_h5_handle_cache"] = {}
+        state["_marker_index_cache"] = {}
         return state
 
     def __len__(self):
@@ -707,21 +869,44 @@ class PatientFeatureDataset(Dataset):
                 self._h5_handle_cache[feature_file] = h5py.File(feature_file, "r")
 
         h5 = self._h5_handle_cache[feature_file]
-        feats_obj = h5["feats"]
+        feats_obj = BagDataset._feature_dataset(h5, self.feature_dataset_name)
         if not isinstance(feats_obj, h5py.Dataset):
             raise RuntimeError(
-                f"expected 'feats' to be an HDF5 dataset but got {type(feats_obj)}"
+                f"expected '{self.feature_dataset_name}' to be an HDF5 dataset but got {type(feats_obj)}"
             )
-        feats = torch.from_numpy(feats_obj[()])
-        # Accept [V] or [1, V]
-        if feats.ndim == 2 and feats.shape[0] == 1:
+        if feature_file not in self._marker_index_cache:
+            self._marker_index_cache[feature_file] = resolve_selected_marker_indices(
+                h5=h5,
+                dataset_name=feats_obj.name.rsplit("/", maxsplit=1)[-1],
+                dataset_ndim=feats_obj.ndim,
+                selected_markers=self.selected_markers,
+            )
+
+        feats_np = np.asarray(feats_obj[()])
+        if (marker_indices := self._marker_index_cache[feature_file]) is not None:
+            if feats_np.ndim == 3:
+                feats_np = feats_np[:, marker_indices, ...]
+            elif feats_np.ndim == 2:
+                feats_np = feats_np[marker_indices, ...]
+            else:
+                raise RuntimeError(
+                    f"Expected marker-aware patient-level features with rank 2 or 3, got {feats_np.shape} in {feature_file}."
+                )
+
+        feats = torch.from_numpy(feats_np)
+        # Accept [V], [1, V], [M, V] or [1, M, V].
+        if feats.ndim == 3 and feats.shape[0] == 1:
+            feats = feats[0]
+        elif feats.ndim == 2 and feats.shape[0] == 1 and self.selected_markers is None:
             feats = feats[0]
         elif feats.ndim == 1:
             pass
+        elif feats.ndim == 2:
+            pass
         else:
             raise RuntimeError(
-                f"Expected single feature vector (shape [F] or [1, F]), got {feats.shape} in {feature_file}."
-                "Check that the features are patient-level."
+                f"Expected patient-level features shaped [F], [1, F], [M, F], or [1, M, F], got {feats.shape} in {feature_file}."
+                " Check that the features are patient-level."
             )
         if self.transform is not None:
             feats = self.transform(feats)
@@ -745,6 +930,23 @@ class CoordsInfo:
 
 
 def get_coords(feature_h5: h5py.File) -> CoordsInfo:
+    # Multiplex h5: coordinates are stored as separate coord_x / coord_y datasets
+    # in slide pixels (stride = tile_size_px). Return them as-is in the coords_um
+    # field; heatmaps_ rescales to µm once slide_mpp is known.
+    if (
+        "coords" not in feature_h5
+        and "coord_x" in feature_h5
+        and "coord_y" in feature_h5
+    ):
+        cx = np.asarray(feature_h5["coord_x"], dtype=np.float32)
+        cy = np.asarray(feature_h5["coord_y"], dtype=np.float32)
+        coords_px = np.stack([cx, cy], axis=1)
+        return CoordsInfo(
+            coords_um=coords_px,
+            tile_size_um=Microns(0.0),
+            tile_size_px=TilePixels(256),
+        )
+
     # NEW: handle missing coords - multiplex data bypass: no coords found; generated fake coords
     if "coords" not in feature_h5:
         feats_obj = feature_h5["patch_embeddings"]
@@ -823,7 +1025,7 @@ def _to_fixed_size_bag(
     the bag is zero-padded to the right.
     """
     # get up to bag_size elements
-    n_tiles, _dim_feats = bag.shape
+    n_tiles = bag.shape[0]
     if n_tiles <= bag_size:
         # take all and pad later
         bag_idxs = torch.arange(n_tiles, device=bag.device)
@@ -840,15 +1042,11 @@ def _to_fixed_size_bag(
 
     # zero-pad if we don't have enough samples
     if bag_samples.shape[0] < bag_size:
+        bag_pad_shape = (bag_size - bag_samples.shape[0], *bag_samples.shape[1:])
         zero_padded_bag = torch.cat(
             (
                 bag_samples,
-                torch.zeros(
-                    bag_size - bag_samples.shape[0],
-                    bag_samples.shape[1],
-                    device=bag.device,
-                    dtype=bag.dtype,
-                ),
+                torch.zeros(bag_pad_shape, device=bag.device, dtype=bag.dtype),
             )
         )
         zero_padded_coord = torch.cat(
@@ -1110,9 +1308,11 @@ def filter_complete_patient_data_(
         )
     }
 
-    _logger.info("Total patients in clinical table: %d", len(patient_to_ground_truth))
-    _logger.info("Patients appearing in slide table: %d", len(patient_to_slides))
-    _logger.info("Final usable patients (complete data): %d", len(patients))
+    _logger.info(
+        f"Total patients in clinical table: {len(patient_to_ground_truth)}\n"
+        f"Patients appearing in slide table: {len(patient_to_slides)}\n"
+        f"Final usable patients (complete data): {len(patients)}\n"
+    )
     return patients
 
 

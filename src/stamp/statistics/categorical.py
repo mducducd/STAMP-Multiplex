@@ -7,8 +7,6 @@ import pandas as pd
 import scipy.stats as st
 from sklearn import metrics
 
-from stamp.utils.path import path_safe
-
 __author__ = "Marko van Treeck"
 __copyright__ = "Copyright (C) 2022-2025 Marko van Treeck"
 __license__ = "MIT"
@@ -139,13 +137,9 @@ def categorical_aggregated_(
         )
 
     preds_df = pd.concat(preds_dfs).sort_index()
-    preds_df.to_csv(
-        outpath / f"{path_safe(ground_truth_label)}_categorical-stats_individual.csv"
-    )
+    preds_df.to_csv(outpath / f"{ground_truth_label}_categorical-stats_individual.csv")
     stats_df = _aggregate_categorical_stats(preds_df.reset_index())
-    stats_df.to_csv(
-        outpath / f"{path_safe(ground_truth_label)}_categorical-stats_aggregated.csv"
-    )
+    stats_df.to_csv(outpath / f"{ground_truth_label}_categorical-stats_aggregated.csv")
 
 
 def categorical_aggregated_multitarget_(
@@ -187,15 +181,11 @@ def categorical_aggregated_multitarget_(
 
         # Concatenate and save individual stats for this target
         preds_df = pd.concat(preds_dfs).sort_index()
-        preds_df.to_csv(
-            outpath / f"{path_safe(target_label)}_categorical-stats_individual.csv"
-        )
+        preds_df.to_csv(outpath / f"{target_label}_categorical-stats_individual.csv")
 
         # Aggregate stats for this target
         stats_df = _aggregate_categorical_stats(preds_df.reset_index())
-        stats_df.to_csv(
-            outpath / f"{path_safe(target_label)}_categorical-stats_aggregated.csv"
-        )
+        stats_df.to_csv(outpath / f"{target_label}_categorical-stats_aggregated.csv")
 
         # Store for summary
         all_target_stats[target_label] = stats_df

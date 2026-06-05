@@ -11,7 +11,9 @@ from random_data import (
     create_random_patient_level_feature_file,
     create_random_slide_tables,
     make_feature_file,
+    make_marker_feature_file,
     make_old_feature_file,
+    make_patient_level_marker_feature_file,
 )
 from torch.utils.data import DataLoader
 
@@ -198,6 +200,57 @@ def test_patient_feature_dataset(
     feats_batch, labels_batch = next(iter(dl))
     assert feats_batch.shape == (batch_size, dim_feats)
     assert labels_batch.shape == (batch_size, 4)
+
+
+def test_bag_dataset_selected_markers() -> None:
+    marker_embeddings = torch.arange(2 * 3 * 4, dtype=torch.float32).reshape(2, 3, 4)
+    coords = torch.tensor([[0.0, 0.0], [1.0, 1.0]])
+    marker_file = make_marker_feature_file(
+        marker_embeddings=marker_embeddings,
+        coords=coords,
+        marker_names=["DAPI", "PanCK", "HER2"],
+    )
+
+    ds = BagDataset(
+        bags=[[marker_file]],
+        bag_size=None,
+        ground_truths=torch.tensor([[1.0, 0.0]]),
+        transform=None,
+        feature_dataset_name="marker_embeddings",
+        selected_markers=["HER2", "DAPI"],
+    )
+
+    bag, loaded_coords, bag_size, label = ds[0]
+
+    assert bag.shape == (2, 2, 4)
+    assert torch.equal(bag[:, 0], marker_embeddings[:, 2])
+    assert torch.equal(bag[:, 1], marker_embeddings[:, 0])
+    assert loaded_coords.shape == (2, 2)
+    assert bag_size == 2
+    assert torch.equal(label, torch.tensor([1.0, 0.0]))
+
+
+def test_patient_feature_dataset_selected_markers() -> None:
+    marker_embeddings = torch.arange(1 * 3 * 4, dtype=torch.float32).reshape(1, 3, 4)
+    marker_file = make_patient_level_marker_feature_file(
+        marker_embeddings=marker_embeddings,
+        marker_names=["DAPI", "PanCK", "HER2"],
+    )
+    labels = torch.tensor([[0.0, 1.0]])
+
+    ds = PatientFeatureDataset(
+        [marker_file],
+        labels,
+        transform=None,
+        feature_dataset_name="marker_embeddings",
+        selected_markers=["PanCK"],
+    )
+
+    feats, label = ds[0]
+
+    assert feats.shape == (1, 4)
+    assert torch.equal(feats[0], marker_embeddings[0, 1])
+    assert torch.equal(label, labels[0])
 
 
 def test_get_coords_with_mpp() -> None:

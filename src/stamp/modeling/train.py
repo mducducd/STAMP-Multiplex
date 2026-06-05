@@ -21,6 +21,10 @@ from stamp.modeling.data import (
     create_dataloader,
     load_patient_data_,
 )
+from stamp.modeling.markers import (
+    NormalizedMarkerSelection,
+    resolve_marker_loading_config,
+)
 from stamp.modeling.registry import ModelName, load_model_class
 from stamp.modeling.transforms import VaryPrecisionTransform
 from stamp.types import (
@@ -69,6 +73,15 @@ def train_categorical_model_(
     )
     _logger.info(f"Detected feature type: {feature_type}")
 
+    feature_dataset_name, selected_markers = resolve_marker_loading_config(
+        feature_dataset_name=config.feature_dataset_name,
+        selected_markers=config.selected_markers,
+        model_name=advanced.model_name.value
+        if advanced.model_name is not None
+        else None,
+        context="training",
+    )
+
     # Train the model (the rest of the logic is unchanged)
     model, train_dl, valid_dl = setup_model_for_training(
         patient_to_data=patient_to_data,
@@ -87,6 +100,8 @@ def train_categorical_model_(
             else None
         ),
         feature_type=feature_type,
+        feature_dataset_name=feature_dataset_name,
+        selected_markers=selected_markers,
     )
     train_model_(
         output_dir=config.output_dir,
@@ -114,6 +129,8 @@ def setup_model_for_training(
     clini_table: Path,
     slide_table: Path | None,
     feature_dir: Path,
+    feature_dataset_name: str,
+    selected_markers: NormalizedMarkerSelection = None,
 ) -> tuple[
     lightning.LightningModule,
     DataLoader,
@@ -121,22 +138,32 @@ def setup_model_for_training(
 ]:
     """Creates a model and dataloaders for training"""
 
-    train_dl, valid_dl, train_categories, dim_feats, train_patients, valid_patients = (
-        setup_dataloaders_for_training(
-            patient_to_data=patient_to_data,
-            task=task,
-            categories=categories,
-            bag_size=advanced.bag_size,
-            batch_size=advanced.batch_size,
-            num_workers=advanced.num_workers,
-            train_transform=train_transform,
-            feature_type=feature_type,
-        )
+    (
+        train_dl,
+        valid_dl,
+        train_categories,
+        dim_feats,
+        marker_count,
+        train_patients,
+        valid_patients,
+    ) = setup_dataloaders_for_training(
+        patient_to_data=patient_to_data,
+        task=task,
+        categories=categories,
+        bag_size=advanced.bag_size,
+        prefetch_bag_size=advanced.prefetch_bag_size,
+        batch_size=advanced.batch_size,
+        num_workers=advanced.num_workers,
+        train_transform=train_transform,
+        feature_type=feature_type,
+        feature_dataset_name=feature_dataset_name,
+        selected_markers=selected_markers,
     )
 
     _logger.info(
-        "Training dataloaders: bag_size=%s, batch_size=%s, num_workers=%s, task=%s",
+        "Training dataloaders: bag_size=%s, prefetch_bag_size=%s, batch_size=%s, num_workers=%s, task=%s",
         advanced.bag_size,
+        advanced.prefetch_bag_size,
         advanced.batch_size,
         advanced.num_workers,
         task,
@@ -152,7 +179,12 @@ def setup_model_for_training(
 
     # 1. Default to a model if none is specified
     if advanced.model_name is None:
-        advanced.model_name = ModelName.VIT if feature_type == "tile" else ModelName.MLP
+        if selected_markers is not None:
+            advanced.model_name = ModelName.MARKER_FUSION
+        else:
+            advanced.model_name = (
+                ModelName.VIT if feature_type == "tile" else ModelName.MLP
+            )
         _logger.info(
             f"No model specified, defaulting to '{advanced.model_name.value}' for feature type '{feature_type}'"
         )
@@ -182,16 +214,24 @@ def setup_model_for_training(
     elif feature_type in (
         "slide",
         "patient",
-    ) and advanced.model_name.value.lower() not in {"mlp", "linear"}:
+    ) and advanced.model_name.value.lower() not in {"mlp", "linear", "marker_fusion"}:
         raise ValueError(
-            f"Feature type '{feature_type}' only supports MLP or Linear. "
-            f"Got '{advanced.model_name.value}'. Please set model_name='mlp' or 'linear'."
+            f"Feature type '{feature_type}' only supports MLP, Linear, or MarkerFusion. "
+            "Got "
+            f"'{advanced.model_name.value}'. Please set model_name to "
+            "'mlp', 'linear', or 'marker_fusion'."
         )
 
     # 4. Get model-specific hyperparameters
     model_specific_params = (
         advanced.model_params.model_dump().get(advanced.model_name.value) or {}
     )
+    if advanced.model_name == ModelName.MARKER_FUSION:
+        model_specific_params = _configure_marker_fusion_params(
+            model_specific_params=model_specific_params,
+            marker_count=marker_count,
+            marker_feature_dim=dim_feats,
+        )
 
     # 5. Calculate total steps for scheduler
     steps_per_epoch = len(train_dl)
@@ -215,6 +255,8 @@ def setup_model_for_training(
         "clini_table": clini_table,
         "slide_table": slide_table,
         "feature_dir": feature_dir,
+        "feature_dataset_name": feature_dataset_name,
+        "selected_markers": list(selected_markers) if selected_markers else None,
     }
 
     all_params = {**common_params, **model_specific_params}
@@ -251,6 +293,9 @@ def setup_model_from_dataloaders(
     clini_table: Path,
     slide_table: Path | None,
     feature_dir: Path,
+    feature_dataset_name: str = "auto",
+    selected_markers: NormalizedMarkerSelection = None,
+    marker_count: int | None = None,
 ) -> lightning.LightningModule:
     """Creates a model from pre-built dataloaders (no internal split)."""
 
@@ -270,7 +315,12 @@ def setup_model_from_dataloaders(
 
     # 1. Default to a model if none is specified
     if advanced.model_name is None:
-        advanced.model_name = ModelName.VIT if feature_type == "tile" else ModelName.MLP
+        if selected_markers is not None:
+            advanced.model_name = ModelName.MARKER_FUSION
+        else:
+            advanced.model_name = (
+                ModelName.VIT if feature_type == "tile" else ModelName.MLP
+            )
         _logger.info(
             f"No model specified, defaulting to '{advanced.model_name.value}' for feature type '{feature_type}'"
         )
@@ -297,19 +347,27 @@ def setup_model_from_dataloaders(
             f"Model '{advanced.model_name.value}' does not support feature type '{feature_type}'. "
             f"Supported types are: {LitModelClass.supported_features}"
         )
-    elif (
-        feature_type in ("slide", "patient")
-        and advanced.model_name.value.lower() != "mlp"
-    ):
+    elif feature_type in (
+        "slide",
+        "patient",
+    ) and advanced.model_name.value.lower() not in {"mlp", "linear", "marker_fusion"}:
         raise ValueError(
-            f"Feature type '{feature_type}' only supports MLP backbones. "
-            f"Got '{advanced.model_name.value}'. Please set model_name='mlp'."
+            f"Feature type '{feature_type}' only supports MLP, Linear, or MarkerFusion. "
+            "Got "
+            f"'{advanced.model_name.value}'. Please set model_name to "
+            "'mlp', 'linear', or 'marker_fusion'."
         )
 
     # 4. Get model-specific hyperparameters
     model_specific_params = (
         advanced.model_params.model_dump().get(advanced.model_name.value) or {}
     )
+    if advanced.model_name == ModelName.MARKER_FUSION:
+        model_specific_params = _configure_marker_fusion_params(
+            model_specific_params=model_specific_params,
+            marker_count=marker_count,
+            marker_feature_dim=dim_feats,
+        )
 
     # 5. Calculate total steps for scheduler
     steps_per_epoch = len(train_dl)
@@ -333,6 +391,8 @@ def setup_model_from_dataloaders(
         "clini_table": clini_table,
         "slide_table": slide_table,
         "feature_dir": feature_dir,
+        "feature_dataset_name": feature_dataset_name,
+        "selected_markers": list(selected_markers) if selected_markers else None,
     }
 
     all_params = {**common_params, **model_specific_params}
@@ -357,15 +417,19 @@ def setup_dataloaders_for_training(
     task: Task,
     categories: Sequence[Category] | None,
     bag_size: int,
+    prefetch_bag_size: int | None,
     batch_size: int,
     num_workers: int,
     train_transform: Callable[[torch.Tensor], torch.Tensor] | None,
     feature_type: str,
+    feature_dataset_name: str,
+    selected_markers: NormalizedMarkerSelection = None,
 ) -> tuple[
     DataLoader,
     DataLoader,
     Sequence[Category] | Mapping[str, Sequence[Category]],
     int,
+    int | None,
     Sequence[PatientId],
     Sequence[PatientId],
 ]:
@@ -457,39 +521,44 @@ def setup_dataloaders_for_training(
             task=task,
             patient_data=[patient_to_data[pid] for pid in train_patients],
             bag_size=bag_size,
+            prefetch_bag_size=prefetch_bag_size,
             batch_size=batch_size,
             shuffle=True,
             num_workers=num_workers,
             transform=train_transform,
             categories=categories,
+            feature_dataset_name=feature_dataset_name,
+            selected_markers=selected_markers,
         )
 
         valid_dl, _ = create_dataloader(
             feature_type=feature_type,
             task=task,
             patient_data=[patient_to_data[pid] for pid in valid_patients],
-            bag_size=None,
+            bag_size=bag_size if feature_type == "tile" else None,
+            prefetch_bag_size=prefetch_bag_size,
             batch_size=1,
             shuffle=False,
             num_workers=num_workers,
             transform=None,
             categories=train_categories,
+            feature_dataset_name=feature_dataset_name,
+            selected_markers=selected_markers,
         )
 
         # Infer feature dimension automatically
         batch = next(iter(train_dl))
-        if feature_type == "tile":
-            bags, _, _, _ = batch
-            dim_feats = bags.shape[-1]
-        else:
-            feats, _ = batch
-            dim_feats = feats.shape[-1]
+        dim_feats, marker_count = infer_feature_dimensions_from_batch(
+            batch=batch,
+            feature_type=feature_type,
+        )
 
         return (
             train_dl,
             valid_dl,
             train_categories,
             dim_feats,
+            marker_count,
             train_patients,
             valid_patients,
         )
@@ -499,6 +568,54 @@ def setup_dataloaders_for_training(
             f"Unsupported feature type: {feature_type}. "
             "Only 'tile', 'slide', and 'patient' are supported."
         )
+
+
+def infer_feature_dimensions_from_batch(
+    *,
+    batch: Any,
+    feature_type: str,
+) -> tuple[int, int | None]:
+    if feature_type == "tile":
+        bags, _, _, _ = batch
+        marker_count = int(bags.shape[-2]) if bags.ndim == 4 else None
+        return int(bags.shape[-1]), marker_count
+
+    feats, _ = batch
+    marker_count = int(feats.shape[-2]) if feats.ndim == 3 else None
+    return int(feats.shape[-1]), marker_count
+
+
+def _configure_marker_fusion_params(
+    *,
+    model_specific_params: dict[str, Any],
+    marker_count: int | None,
+    marker_feature_dim: int,
+) -> dict[str, Any]:
+    updated_params = dict(model_specific_params)
+
+    if marker_count is not None:
+        if (
+            "n_markers" in updated_params
+            and updated_params["n_markers"] != marker_count
+        ):
+            _logger.warning(
+                "Overriding marker_fusion.n_markers=%s with inferred value %s from loaded data",
+                updated_params["n_markers"],
+                marker_count,
+            )
+        updated_params["n_markers"] = marker_count
+
+        if "marker_feature_dim" in updated_params and updated_params[
+            "marker_feature_dim"
+        ] not in {None, marker_feature_dim}:
+            _logger.warning(
+                "Overriding marker_fusion.marker_feature_dim=%s with inferred value %s from loaded data",
+                updated_params["marker_feature_dim"],
+                marker_feature_dim,
+            )
+        updated_params["marker_feature_dim"] = marker_feature_dim
+
+    return updated_params
 
 
 def train_model_(
