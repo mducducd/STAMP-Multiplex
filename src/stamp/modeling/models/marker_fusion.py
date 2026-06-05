@@ -2,11 +2,10 @@ from __future__ import annotations
 
 import torch
 from beartype import beartype
-from einops import repeat
 from jaxtyping import Float, jaxtyped
 from torch import Tensor, nn
 
-from stamp.modeling.models.vision_tranformer import Transformer
+from stamp.modeling.models.vision_tranformer import _VisionTransformerEncoder
 
 
 class _MarkerBranchViT(nn.Module):
@@ -24,17 +23,12 @@ class _MarkerBranchViT(nn.Module):
         use_alibi: bool,
     ) -> None:
         super().__init__()
-        self.class_token = nn.Parameter(torch.randn(dim_model))
-        self.project_features = nn.Sequential(
-            nn.Linear(dim_input, dim_model, bias=True),
-            nn.GELU(),
-            nn.Dropout(dropout),
-        )
-        self.transformer = Transformer(
-            dim=dim_model,
-            depth=n_layers,
-            heads=n_heads,
-            mlp_dim=dim_feedforward,
+        self.encoder = _VisionTransformerEncoder(
+            dim_input=dim_input,
+            dim_model=dim_model,
+            n_layers=n_layers,
+            n_heads=n_heads,
+            dim_feedforward=dim_feedforward,
             dropout=dropout,
             use_alibi=use_alibi,
         )
@@ -44,23 +38,15 @@ class _MarkerBranchViT(nn.Module):
         x: Float[Tensor, "batch token dim_input"],
     ) -> Float[Tensor, "batch dim_model"]:
         batch_size, n_tokens, _ = x.shape
-        x = self.project_features(x)
+        coords = torch.zeros(batch_size, n_tokens, 2, device=x.device, dtype=x.dtype)
+        coords[:, :, 0] = torch.arange(n_tokens, device=x.device, dtype=x.dtype)
 
-        cls_tokens = repeat(self.class_token, "d -> b 1 d", b=batch_size)
-        x = torch.cat([cls_tokens, x], dim=1)
-
-        coords = torch.zeros(
-            batch_size, n_tokens + 1, 2, device=x.device, dtype=x.dtype
-        )
-        coords[:, 1:, 0] = torch.arange(n_tokens, device=x.device, dtype=x.dtype)
-
-        x = self.transformer(
+        return self.encoder(
             x,
             coords=coords,
             attn_mask=None,
             alibi_mask=None,
         )
-        return x[:, 0]
 
 
 class MarkerFusion(nn.Module):

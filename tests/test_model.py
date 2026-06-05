@@ -1,6 +1,7 @@
 import torch
 
 from stamp.modeling.models.barspoon import EncDecTransformer
+from stamp.modeling.models.marker_fusion import MarkerFusion
 from stamp.modeling.models.mlp import MLP
 from stamp.modeling.models.trans_mil import TransMIL
 from stamp.modeling.models.vision_tranformer import VisionTransformer
@@ -90,6 +91,34 @@ def test_mlp_classifier_dims(
     )
     feats = torch.rand((batch_size, input_dim))
     logits = model.forward(feats)
+    assert logits.shape == (batch_size, num_classes)
+
+
+def test_marker_fusion_dims(
+    num_classes: int = 3,
+    batch_size: int = 5,
+    n_tiles: int = 8,
+    n_markers: int = 4,
+    marker_feature_dim: int = 16,
+    n_heads: int = 2,
+) -> None:
+    model = MarkerFusion(
+        dim_input=marker_feature_dim,
+        dim_output=num_classes,
+        n_markers=n_markers,
+        marker_feature_dim=marker_feature_dim,
+        dim_model=n_heads * 12,
+        n_layers=2,
+        n_heads=n_heads,
+        dim_feedforward=48,
+        dropout=0.1,
+        use_alibi=False,
+    )
+
+    marker_embeddings = torch.rand(
+        (batch_size, n_tiles, n_markers, marker_feature_dim)
+    )
+    logits = model.forward(marker_embeddings)
     assert logits.shape == (batch_size, num_classes)
 
 

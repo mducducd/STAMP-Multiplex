@@ -295,11 +295,10 @@ class Transformer(nn.Module):
         return x
 
 
-class VisionTransformer(nn.Module):
+class _VisionTransformerEncoder(nn.Module):
     def __init__(
         self,
         *,
-        dim_output: int,
         dim_input: int,
         dim_model: int,
         n_layers: int,
@@ -326,16 +325,15 @@ class VisionTransformer(nn.Module):
             use_alibi=use_alibi,
         )
 
-        self.mlp_head = nn.Sequential(nn.Linear(dim_model, dim_output))
-
     @jaxtyped(typechecker=beartype)
     def forward(
         self,
         bags: Float[Tensor, "batch tile feature"],
         *,
         coords: Float[Tensor, "batch tile 2"],
-        mask: Bool[Tensor, "batch tile"] | None,
-    ) -> Float[Tensor, "batch logit"]:
+        attn_mask: Bool[Tensor, "batch sequence sequence"] | None,
+        alibi_mask: Bool[Tensor, "batch sequence sequence"] | None,
+    ) -> Float[Tensor, "batch dim_model"]:
         batch_size, _n_tiles, _n_features = bags.shape
 
         # Map input sequence to latent space of TransMIL
@@ -347,13 +345,67 @@ class VisionTransformer(nn.Module):
         cls_tokens = repeat(self.class_token, "d -> b 1 d", b=batch_size)
         bags = torch.cat([cls_tokens, bags], dim=1)
         coords = torch.cat(
-            [torch.zeros(batch_size, 1, 2).type_as(coords), coords], dim=1
+            [
+                torch.zeros(
+                    batch_size, 1, 2, device=coords.device, dtype=coords.dtype
+                ),
+                coords,
+            ],
+            dim=1,
         )
 
+        bags = self.transformer(
+            bags,
+            coords=coords,
+            attn_mask=attn_mask,
+            alibi_mask=alibi_mask,
+        )
+
+        # Only take class token
+        return bags[:, 0]
+
+
+class VisionTransformer(nn.Module):
+    def __init__(
+        self,
+        *,
+        dim_output: int,
+        dim_input: int,
+        dim_model: int,
+        n_layers: int,
+        n_heads: int,
+        dim_feedforward: int,
+        dropout: float,
+        use_alibi: bool,
+    ) -> None:
+        super().__init__()
+        self.encoder = _VisionTransformerEncoder(
+            dim_input=dim_input,
+            dim_model=dim_model,
+            n_layers=n_layers,
+            n_heads=n_heads,
+            dim_feedforward=dim_feedforward,
+            dropout=dropout,
+            use_alibi=use_alibi,
+        )
+
+        self.mlp_head = nn.Sequential(nn.Linear(dim_model, dim_output))
+
+    @jaxtyped(typechecker=beartype)
+    def forward(
+        self,
+        bags: Float[Tensor, "batch tile feature"],
+        *,
+        coords: Float[Tensor, "batch tile 2"],
+        mask: Bool[Tensor, "batch tile"] | None,
+    ) -> Float[Tensor, "batch logit"]:
         match mask:
             case None:
-                bags = self.transformer(
-                    bags, coords=coords, attn_mask=None, alibi_mask=None
+                bags = self.encoder(
+                    bags,
+                    coords=coords,
+                    attn_mask=None,
+                    alibi_mask=None,
                 )
 
             case _:
@@ -371,14 +423,11 @@ class VisionTransformer(nn.Module):
                 alibi_mask[:, 0, :] = True
                 alibi_mask[:, :, 0] = True
 
-                bags = self.transformer(
+                bags = self.encoder(
                     bags,
                     coords=coords,
                     attn_mask=square_attn_mask,
                     alibi_mask=alibi_mask,
                 )
-
-        # Only take class token
-        bags = bags[:, 0]
 
         return self.mlp_head(bags)
