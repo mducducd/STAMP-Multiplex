@@ -1,6 +1,8 @@
 import argparse
 import logging
+import os
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -74,10 +76,78 @@ def _run_cli(args: argparse.Namespace) -> None:
             print(yaml.dump(config.model_dump(mode="json", exclude_none=True)))
 
         case "preprocess":
-            from stamp.preprocessing import extract_
+            import torch
+
+            from stamp.preprocessing import (
+                _SLIDE_END_ENV,
+                _SLIDE_START_ENV,
+                _discover_preprocessing_slide_paths,
+                extract_,
+            )
 
             if config.preprocessing is None:
                 raise ValueError("no preprocessing configuration supplied")
+
+            if (
+                config.preprocessing.parallel
+                and os.environ.get(_SLIDE_START_ENV) is None
+                and os.environ.get(_SLIDE_END_ENV) is None
+                and str(config.preprocessing.device).startswith("cuda")
+                and torch.cuda.is_available()
+            ):
+                n_gpus = torch.cuda.device_count()
+                if n_gpus > 1:
+                    slide_paths = _discover_preprocessing_slide_paths(
+                        wsi_dir=config.preprocessing.wsi_dir,
+                        wsi_list=config.preprocessing.wsi_list,
+                        mode=config.preprocessing.mode,
+                    )
+                    if not slide_paths:
+                        _logger.info("Nothing to preprocess.")
+                        return
+
+                    chunk_size = (len(slide_paths) + n_gpus - 1) // n_gpus
+                    _logger.info(
+                        "Launching %d preprocessing workers across GPUs for %d slides",
+                        n_gpus,
+                        len(slide_paths),
+                    )
+
+                    workers: list[subprocess.Popen[bytes]] = []
+                    for gpu_idx in range(n_gpus):
+                        start = gpu_idx * chunk_size
+                        end = min(start + chunk_size, len(slide_paths))
+                        if start >= len(slide_paths):
+                            break
+
+                        env = {
+                            **os.environ,
+                            "CUDA_VISIBLE_DEVICES": str(gpu_idx),
+                            _SLIDE_START_ENV: str(start),
+                            _SLIDE_END_ENV: str(end),
+                        }
+                        workers.append(
+                            subprocess.Popen(
+                                [
+                                    sys.executable,
+                                    "-m",
+                                    "stamp",
+                                    "--config",
+                                    str(args.config_file_path),
+                                    "preprocess",
+                                ],
+                                env=env,
+                                cwd=Path(__file__).resolve().parents[2],
+                            )
+                        )
+
+                    exit_codes = [worker.wait() for worker in workers]
+                    failed = [code for code in exit_codes if code != 0]
+                    if failed:
+                        raise RuntimeError(
+                            f"{len(failed)} preprocessing worker(s) failed with exit codes {failed}"
+                        )
+                    return
 
             _add_file_handle_(_logger, output_dir=config.preprocessing.output_dir)
             _logger.info(
@@ -99,6 +169,9 @@ def _run_cli(args: argparse.Namespace) -> None:
                 canny_cutoff=config.preprocessing.canny_cutoff,
                 cache_tiles_ext=config.preprocessing.cache_tiles_ext,
                 generate_hash=config.preprocessing.generate_hash,
+                mode=config.preprocessing.mode,
+                marker_configs=config.preprocessing.markers,
+                marker_metadata_csv=config.preprocessing.marker_metadata_csv,
             )
 
         case "encode_slides":

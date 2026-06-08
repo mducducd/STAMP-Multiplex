@@ -1,5 +1,6 @@
 import logging
-from collections.abc import Callable, Iterator
+import os
+from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import assert_never
@@ -16,8 +17,12 @@ from torch.utils.data import DataLoader, IterableDataset
 from tqdm import tqdm
 
 import stamp
-from stamp.preprocessing.config import ExtractorName
-from stamp.preprocessing.extractor import Extractor
+from stamp.preprocessing.config import (
+    ExtractorName,
+    MultiplexMarkerConfig,
+    PreprocessingMode,
+)
+from stamp.preprocessing.extractor import Extractor, MultiplexExtractor
 from stamp.preprocessing.tiling import (
     MPPExtractionError,
     get_slide_mpp_,
@@ -56,6 +61,8 @@ supported_extensions = {
 }
 
 _logger = logging.getLogger("stamp")
+_SLIDE_START_ENV = "STAMP_PREPROCESS_SLIDE_START"
+_SLIDE_END_ENV = "STAMP_PREPROCESS_SLIDE_END"
 
 
 class _TileDataset(IterableDataset):
@@ -104,7 +111,152 @@ class _TileDataset(IterableDataset):
                 canny_cutoff=self.canny_cutoff,
                 default_slide_mpp=self.default_slide_mpp,
             )
-        )
+            )
+
+
+def _resolve_extractor(
+    extractor: ExtractorName | Extractor | MultiplexExtractor,
+) -> Extractor | MultiplexExtractor:
+    match extractor:
+        case ExtractorName.KRONOS:
+            from stamp.preprocessing.extractor.kronos import kronos
+
+            return kronos()
+
+        case ExtractorName.CTRANSPATH:
+            from stamp.preprocessing.extractor.ctranspath import ctranspath
+
+            return ctranspath()
+
+        case ExtractorName.CHIEF_CTRANSPATH:
+            from stamp.preprocessing.extractor.chief_ctranspath import chief_ctranspath
+
+            return chief_ctranspath()
+
+        case ExtractorName.CONCH:
+            from stamp.preprocessing.extractor.conch import conch
+
+            return conch()
+
+        case ExtractorName.CONCH1_5:
+            from stamp.preprocessing.extractor.conch1_5 import conch1_5
+
+            return conch1_5()
+
+        case ExtractorName.UNI:
+            from stamp.preprocessing.extractor.uni import uni
+
+            return uni()
+
+        case ExtractorName.UNI2:
+            from stamp.preprocessing.extractor.uni2 import uni2
+
+            return uni2()
+
+        case ExtractorName.DINO_BLOOM:
+            from stamp.preprocessing.extractor.dinobloom import dino_bloom
+
+            return dino_bloom()
+
+        case ExtractorName.RED_DINO:
+            from stamp.preprocessing.extractor.reddino import red_dino
+
+            return red_dino()
+
+        case ExtractorName.VIRCHOW:
+            from stamp.preprocessing.extractor.virchow import virchow
+
+            return virchow()
+
+        case ExtractorName.VIRCHOW_FULL:
+            from stamp.preprocessing.extractor.virchow_full import virchow_full
+
+            return virchow_full()
+
+        case ExtractorName.VIRCHOW2:
+            from stamp.preprocessing.extractor.virchow2 import virchow2
+
+            return virchow2()
+
+        case ExtractorName.H_OPTIMUS_0:
+            from stamp.preprocessing.extractor.h_optimus_0 import h_optimus_0
+
+            return h_optimus_0()
+
+        case ExtractorName.H_OPTIMUS_1:
+            from stamp.preprocessing.extractor.h_optimus_1 import h_optimus_1
+
+            return h_optimus_1()
+
+        case ExtractorName.GIGAPATH:
+            from stamp.preprocessing.extractor.gigapath import gigapath
+
+            return gigapath()
+
+        case ExtractorName.MUSK:
+            from stamp.preprocessing.extractor.musk import musk
+
+            return musk()
+
+        case ExtractorName.MSTAR:
+            from stamp.preprocessing.extractor.mstar import mstar
+
+            return mstar()
+
+        case ExtractorName.PLIP:
+            from stamp.preprocessing.extractor.plip import plip
+
+            return plip()
+
+        case ExtractorName.KEEP:
+            from stamp.preprocessing.extractor.keep import keep
+
+            return keep()
+
+        case ExtractorName.TICON:
+            from stamp.preprocessing.extractor.ticon import ticon
+
+            return ticon()
+
+        case ExtractorName.EMPTY:
+            from stamp.preprocessing.extractor.empty import empty
+
+            return empty()
+
+        case Extractor():
+            return extractor
+
+        case MultiplexExtractor():
+            return extractor
+
+        case _ as unreachable:
+            assert_never(unreachable)
+
+
+def _worker_slide_bounds() -> tuple[int | None, int | None]:
+    start = os.environ.get(_SLIDE_START_ENV)
+    end = os.environ.get(_SLIDE_END_ENV)
+    return (
+        int(start) if start is not None else None,
+        int(end) if end is not None else None,
+    )
+
+
+def _discover_preprocessing_slide_paths(
+    *,
+    wsi_dir: Path,
+    wsi_list: Path | None,
+    mode: PreprocessingMode,
+) -> list[Path]:
+    if wsi_list is not None:
+        return [wsi_dir / slide for slide in _get_slide_paths(wsi_list)]
+
+    if mode == PreprocessingMode.MULTIPLEX:
+        from stamp.preprocessing.multiplex import _discover_slide_files
+
+        return _discover_slide_files(wsi_dir)
+
+    return [p for ext in supported_extensions for p in wsi_dir.glob(f"**/*{ext}")]
 
 
 def extract_(
@@ -114,7 +266,7 @@ def extract_(
     wsi_list: Path | None,
     cache_dir: Path | None,
     cache_tiles_ext: ImageExtension,
-    extractor: ExtractorName | Extractor,
+    extractor: ExtractorName | Extractor | MultiplexExtractor,
     tile_size_px: TilePixels,
     tile_size_um: Microns,
     max_workers: int,
@@ -123,6 +275,9 @@ def extract_(
     brightness_cutoff: int | None,
     canny_cutoff: float | None,
     generate_hash: bool,
+    mode: PreprocessingMode = PreprocessingMode.WSI,
+    marker_configs: Sequence[MultiplexMarkerConfig] | None = None,
+    marker_metadata_csv: Path | None = None,
 ) -> None:
     """
     Extracts features from slides.
@@ -134,111 +289,37 @@ def extract_(
             If not `None`, ignore the slide metadata MPP, instead replacing it with this value.
             Useful for slides without metadata.
     """
-    match extractor:
-        case ExtractorName.CTRANSPATH:
-            from stamp.preprocessing.extractor.ctranspath import ctranspath
+    extractor = _resolve_extractor(extractor)
+    slide_start, slide_end = _worker_slide_bounds()
 
-            extractor = ctranspath()
+    if mode == PreprocessingMode.MULTIPLEX:
+        from stamp.preprocessing.multiplex import extract_multiplex_
 
-        case ExtractorName.CHIEF_CTRANSPATH:
-            from stamp.preprocessing.extractor.chief_ctranspath import chief_ctranspath
+        if marker_configs is None:
+            raise ValueError(
+                "marker_configs must be provided when preprocessing.mode='multiplex'"
+            )
 
-            extractor = chief_ctranspath()
+        extract_multiplex_(
+            wsi_dir=wsi_dir,
+            output_dir=output_dir,
+            wsi_list=wsi_list,
+            extractor=extractor,
+            tile_size_px=tile_size_px,
+            max_workers=max_workers,
+            device=device,
+            marker_configs=marker_configs,
+            marker_metadata_csv=marker_metadata_csv,
+            generate_hash=generate_hash,
+            slide_start=slide_start,
+            slide_end=slide_end,
+        )
+        return
 
-        case ExtractorName.CONCH:
-            from stamp.preprocessing.extractor.conch import conch
-
-            extractor = conch()
-
-        case ExtractorName.CONCH1_5:
-            from stamp.preprocessing.extractor.conch1_5 import conch1_5
-
-            extractor = conch1_5()
-
-        case ExtractorName.UNI:
-            from stamp.preprocessing.extractor.uni import uni
-
-            extractor = uni()
-
-        case ExtractorName.UNI2:
-            from stamp.preprocessing.extractor.uni2 import uni2
-
-            extractor = uni2()
-
-        case ExtractorName.DINO_BLOOM:
-            from stamp.preprocessing.extractor.dinobloom import dino_bloom
-
-            extractor = dino_bloom()
-
-        case ExtractorName.RED_DINO:
-            from stamp.preprocessing.extractor.reddino import red_dino
-
-            extractor = red_dino()
-
-        case ExtractorName.VIRCHOW:
-            from stamp.preprocessing.extractor.virchow import virchow
-
-            extractor = virchow()
-
-        case ExtractorName.VIRCHOW_FULL:
-            from stamp.preprocessing.extractor.virchow_full import virchow_full
-
-            extractor = virchow_full()
-
-        case ExtractorName.VIRCHOW2:
-            from stamp.preprocessing.extractor.virchow2 import virchow2
-
-            extractor = virchow2()
-
-        case ExtractorName.H_OPTIMUS_0:
-            from stamp.preprocessing.extractor.h_optimus_0 import h_optimus_0
-
-            extractor = h_optimus_0()
-
-        case ExtractorName.H_OPTIMUS_1:
-            from stamp.preprocessing.extractor.h_optimus_1 import h_optimus_1
-
-            extractor = h_optimus_1()
-
-        case ExtractorName.GIGAPATH:
-            from stamp.preprocessing.extractor.gigapath import gigapath
-
-            extractor = gigapath()
-
-        case ExtractorName.MUSK:
-            from stamp.preprocessing.extractor.musk import musk
-
-            extractor = musk()
-
-        case ExtractorName.MSTAR:
-            from stamp.preprocessing.extractor.mstar import mstar
-
-            extractor = mstar()
-
-        case ExtractorName.PLIP:
-            from stamp.preprocessing.extractor.plip import plip
-
-            extractor = plip()
-
-        case ExtractorName.KEEP:
-            from stamp.preprocessing.extractor.keep import keep
-
-            extractor = keep()
-        case ExtractorName.TICON:
-            from stamp.preprocessing.extractor.ticon import ticon
-
-            extractor = ticon()
-
-        case ExtractorName.EMPTY:
-            from stamp.preprocessing.extractor.empty import empty
-
-            extractor = empty()
-
-        case Extractor():
-            extractor = extractor
-
-        case _ as unreachable:
-            assert_never(unreachable)
+    if isinstance(extractor, MultiplexExtractor):
+        raise TypeError(
+            "MultiplexExtractor instances require preprocessing.mode='multiplex'"
+        )
 
     model = extractor.model.to(device).eval()
 
@@ -258,19 +339,20 @@ def extract_(
     )
 
     # Collect slides for preprocessing
-    if wsi_list is not None:
-        slide_paths = _get_slide_paths(wsi_list)
-        slide_paths = [wsi_dir / slide for slide in slide_paths]
-    else:
-        slide_paths = [
-            p for ext in supported_extensions for p in wsi_dir.glob(f"**/*{ext}")
-        ]
+    slide_paths = _discover_preprocessing_slide_paths(
+        wsi_dir=wsi_dir,
+        wsi_list=wsi_list,
+        mode=mode,
+    )
 
     # We shuffle so if we run multiple jobs on multiple computers at the same time,
     # They won't interfere with each other too much
-    rng = np.random.default_rng()  # system entropy
-    perm = rng.permutation(len(slide_paths))
-    slide_paths = [slide_paths[i] for i in perm]
+    if slide_start is None and slide_end is None:
+        rng = np.random.default_rng()  # system entropy
+        perm = rng.permutation(len(slide_paths))
+        slide_paths = [slide_paths[i] for i in perm]
+    else:
+        slide_paths = slide_paths[slice(slide_start, slide_end)]
 
     for slide_path in (progress := tqdm(slide_paths)):
         progress.set_description(str(slide_path.relative_to(wsi_dir)))

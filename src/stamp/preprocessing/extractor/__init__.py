@@ -5,7 +5,7 @@ from typing import Generic, TypeVar
 import torch
 from jaxtyping import Float
 from PIL import Image
-from torch import nn
+from torch import Tensor, nn
 
 __author__ = "Marko van Treeck"
 __copyright__ = "Copyright (C) 2022-2025 Marko van Treeck"
@@ -26,3 +26,25 @@ class Extractor(Generic[ExtractorModel]):
     If possible, it should include the digest of the model weights etc.
     so that any change in the model also changes its ID.
     """
+
+
+@dataclass(frozen=True)
+class MultiplexFeatures:
+    feats: Float[Tensor, "batch feature"]
+    marker_embeddings: Float[Tensor, "batch marker feature"]
+    token_embeddings: Float[Tensor, "batch marker token_y token_x feature"]
+
+
+@dataclass(frozen=True)
+class MultiplexExtractor(Generic[ExtractorModel]):
+    _: KW_ONLY
+    model: ExtractorModel
+    identifier: str
+    forward: Callable[
+        [ExtractorModel, Float[Tensor, "batch marker height width"]],
+        MultiplexFeatures,
+    ]
+    transform: Callable[
+        [Float[Tensor, "marker height width"]],
+        Float[Tensor, "..."],
+    ] | None = None

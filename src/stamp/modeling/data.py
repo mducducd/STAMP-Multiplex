@@ -941,10 +941,11 @@ def get_coords(feature_h5: h5py.File) -> CoordsInfo:
         cx = np.asarray(feature_h5["coord_x"], dtype=np.float32)
         cy = np.asarray(feature_h5["coord_y"], dtype=np.float32)
         coords_px = np.stack([cx, cy], axis=1)
+        tile_size_px = TilePixels(int(feature_h5.attrs.get("tile_size_px", 256)))
         return CoordsInfo(
             coords_um=coords_px,
             tile_size_um=Microns(0.0),
-            tile_size_px=TilePixels(256),
+            tile_size_px=tile_size_px,
         )
 
     # NEW: handle missing coords - multiplex data bypass: no coords found; generated fake coords

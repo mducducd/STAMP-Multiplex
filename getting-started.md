@@ -64,6 +64,7 @@ Stamp currently supports the following feature extractors:
   - [KEEP][keep]
   - [TICON][ticon]
   - [RedDino][reddino]
+  - [KRONOS][kronos]
 
 
 As some of the above require you to request access to the model on huggingface,
@@ -167,7 +168,72 @@ meaning ignored that it was ignored during feature extraction.
 [PRISM]: https://huggingface.co/paige-ai/Prism
 [TICON]: https://cvlab-stonybrook.github.io/TICON/ "TICON: A Slide-Level Tile Contextualizer for Histopathology Representation Learning"
 [reddino]: https://github.com/Snarci/RedDino "RedDino: A Foundation Model for Red Blood Cell Analysis"
+[kronos]: https://huggingface.co/MahmoodLab/kronos
 
+
+## Multiplex Feature Extraction
+
+Stamp also supports multiplex TIFF/QPTIFF preprocessing.
+This path is intended for channel-ordered multiplex images where the `markers`
+list in the config defines the semantic meaning of each channel in file order.
+
+For LZW-compressed multiplex TIFF/QPTIFF files, STAMP requires `imagecodecs`.
+If you installed STAMP before this dependency was added, install it into the
+active environment before running multiplex preprocessing:
+
+```sh
+uv pip install --python .venv/bin/python imagecodecs
+```
+
+For multiplex extraction with KRONOS, the most important preprocessing settings are:
+
+```yaml
+preprocessing:
+  output_dir: "/absolute/path/to/output_features"
+  wsi_dir: "/absolute/path/to/multiplex_slides"
+  mode: "multiplex"
+  extractor: "kronos"
+  device: "cuda"
+
+  # Optional: split slides across all visible GPUs.
+  parallel: true
+
+  # Patch size in pixels. KRONOS expects values divisible by 16.
+  tile_size_px: 256
+  tile_size_um: 256.0
+
+  # Optional CSV used to auto-fill missing marker mean/std values.
+  marker_metadata_csv: "/absolute/path/to/marker_metadata.csv"
+
+  # Markers must be listed in the same order as the image channels.
+  markers:
+    - name: "DAPI"
+    - name: "CD8"
+    - name: "Ki67"
+    - name: "GrzB"
+    - name: "FOXP3"
+    - name: "CD4"
+    - name: "CD3"
+```
+
+Then run:
+
+```sh
+stamp --config stamp-test-experiment/config.yaml preprocess
+```
+
+This writes one `.h5` file per slide with:
+
+- `feats`
+- `patch_embeddings`
+- `marker_embeddings`
+- `token_embeddings`
+- `coord_x`
+- `coord_y`
+
+If a multiplex slide contains more channels than listed in `markers`,
+STAMP uses the first `len(markers)` channels in file order and logs a warning.
+If a slide contains fewer channels than configured, preprocessing fails for that slide.
 
 
 ## Doing Cross-Validation on the Data Set

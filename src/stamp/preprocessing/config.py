@@ -1,7 +1,7 @@
 from enum import StrEnum
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from stamp.types import ImageExtension, Microns, SlideMPP, TilePixels
 
@@ -11,6 +11,7 @@ __license__ = "MIT"
 
 
 class ExtractorName(StrEnum):
+    KRONOS = "kronos"
     CTRANSPATH = "ctranspath"
     CHIEF_CTRANSPATH = "chief-ctranspath"
     CONCH = "conch"
@@ -33,11 +34,25 @@ class ExtractorName(StrEnum):
     RED_DINO = "red-dino"
 
 
+class PreprocessingMode(StrEnum):
+    WSI = "wsi"
+    MULTIPLEX = "multiplex"
+
+
+class MultiplexMarkerConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1)
+    mean: float | None = None
+    std: float | None = Field(default=None, gt=0.0)
+
+
 class PreprocessingConfig(BaseModel, arbitrary_types_allowed=True):
     model_config = ConfigDict(extra="forbid")
 
     output_dir: Path
     wsi_dir: Path
+    mode: PreprocessingMode = PreprocessingMode.WSI
     wsi_list: Path | None = Field(
         default=None, description="Txt, Excel or CSV to read data filename from"
     )
@@ -53,6 +68,7 @@ class PreprocessingConfig(BaseModel, arbitrary_types_allowed=True):
         )
     )
     generate_hash: bool = True
+    parallel: bool = False
 
     default_slide_mpp: SlideMPP | None = None
     """MPP of the slide to use if none can be inferred from the WSI"""
@@ -68,3 +84,31 @@ class PreprocessingConfig(BaseModel, arbitrary_types_allowed=True):
     will be rejected.
     If set to `None`, brightness-based rejection is disabled.
     """
+
+    markers: list[MultiplexMarkerConfig] | None = Field(
+        default=None,
+        description=(
+            "Channel-ordered marker metadata for multiplex preprocessing. "
+            "Required when preprocessing.mode='multiplex'."
+        ),
+    )
+    marker_metadata_csv: Path | None = Field(
+        default=None,
+        description=(
+            "Optional CSV containing columns marker_name, marker_mean, marker_std. "
+            "When omitted, STAMP uses its bundled multiplex marker metadata file to "
+            "auto-fill missing marker mean/std values."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _validate_multiplex_fields(self) -> "PreprocessingConfig":
+        if self.mode != PreprocessingMode.MULTIPLEX:
+            return self
+
+        if not self.markers:
+            raise ValueError(
+                "preprocessing.markers must be provided when preprocessing.mode='multiplex'"
+            )
+
+        return self

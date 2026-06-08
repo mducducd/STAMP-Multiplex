@@ -1,6 +1,8 @@
 # %%
 from pathlib import Path
 
+import pytest
+
 from stamp.heatmaps.config import HeatmapConfig
 from stamp.modeling.config import (
     AdvancedConfig,
@@ -15,7 +17,9 @@ from stamp.modeling.config import (
 from stamp.preprocessing.config import (
     ExtractorName,
     Microns,
+    MultiplexMarkerConfig,
     PreprocessingConfig,
+    PreprocessingMode,
     SlideMPP,
     TilePixels,
 )
@@ -80,6 +84,7 @@ def test_config_parsing() -> None:
                 "extractor": "ctranspath",
                 "max_workers": 8,
                 "output_dir": "bla",
+                "parallel": True,
                 "tile_size_px": 224,
                 "tile_size_um": 256.0,
                 "wsi_dir": "wsis",
@@ -150,6 +155,7 @@ def test_config_parsing() -> None:
             extractor=ExtractorName.CTRANSPATH,
             max_workers=8,
             device="cuda",
+            parallel=True,
             brightness_cutoff=240,
             canny_cutoff=0.02,
             default_slide_mpp=SlideMPP(1.0),
@@ -176,7 +182,7 @@ def test_config_parsing() -> None:
             clini_table=Path("clini.xlsx"),
             slide_table=Path("slide.csv"),
             feature_dir=Path("CRC"),
-            selected_markers="PanCK",
+            selected_markers=["PanCK", "HER2"],
             ground_truth_label="isMSIH",
             time_label="time_label",
             status_label="status_label",
@@ -199,7 +205,7 @@ def test_config_parsing() -> None:
             clini_table=Path("clini.xlsx"),
             slide_table=Path("slide.csv"),
             feature_dir=Path("CRC"),
-            selected_markers=["PanCK", "HER2"],
+            selected_markers="PanCK",
             ground_truth_label="isMSIH",
             time_label="time_label",
             status_label="status_label",
@@ -266,3 +272,29 @@ def test_config_parsing() -> None:
             ),
         ),
     )
+
+
+def test_multiplex_preprocessing_requires_marker_metadata() -> None:
+    with pytest.raises(ValueError, match="preprocessing.markers must be provided"):
+        PreprocessingConfig(
+            output_dir=Path("out"),
+            wsi_dir=Path("wsis"),
+            extractor=ExtractorName.EMPTY,
+            mode=PreprocessingMode.MULTIPLEX,
+        )
+
+
+def test_multiplex_preprocessing_accepts_markers() -> None:
+    config = PreprocessingConfig(
+        output_dir=Path("out"),
+        wsi_dir=Path("wsis"),
+        extractor=ExtractorName.EMPTY,
+        mode=PreprocessingMode.MULTIPLEX,
+        markers=[
+            MultiplexMarkerConfig(name="DAPI"),
+            MultiplexMarkerConfig(name="PanCK"),
+        ],
+    )
+
+    assert config.mode == PreprocessingMode.MULTIPLEX
+    assert [marker.name for marker in config.markers or []] == ["DAPI", "PanCK"]

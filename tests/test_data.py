@@ -283,6 +283,23 @@ def test_get_coords_with_mpp() -> None:
             _ = coords_info.mpp
 
 
+def test_get_coords_for_multiplex_coord_datasets_uses_tile_size_attr() -> None:
+    file_bytes = BytesIO()
+    with h5py.File(file_bytes, "w") as h5:
+        h5["coord_x"] = [0, 64, 128]
+        h5["coord_y"] = [0, 64, 128]
+        h5.attrs["tile_size_px"] = 64
+    with h5py.File(file_bytes, "r") as h5:
+        coords_info = get_coords(h5)
+
+    assert torch.equal(
+        torch.from_numpy(coords_info.coords_um),
+        torch.tensor([[0.0, 0.0], [64.0, 64.0], [128.0, 128.0]]),
+    )
+    assert coords_info.tile_size_um == Microns(0.0)
+    assert coords_info.tile_size_px == TilePixels(64)
+
+
 def test_get_coords_invalid_file() -> None:
     # Test invalid feature file with missing attributes
     file_bytes = BytesIO()

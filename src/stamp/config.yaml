@@ -4,7 +4,7 @@ preprocessing:
   # Extractor to use for feature extractor.  Possible options are "ctranspath",
   # "uni", "conch", "chief-ctranspath", "conch1_5", "uni2", "dino-bloom",
   # "gigapath", "h-optimus-0", "h-optimus-1", "virchow2", "virchow", 
-  # "virchow-full", "musk", "mstar", "plip", "ticon", "red-dino", "keep"
+  # "virchow-full", "musk", "mstar", "plip", "ticon", "red-dino", "keep", "kronos"
   # Some of them require requesting access to the respective authors beforehand.
   extractor: "chief-ctranspath"
 
@@ -29,6 +29,22 @@ preprocessing:
   # Magnification level to extract tiles from
   #default_slide_mpp: 1.0
 
+  # For multiplex TIFF/QPTIFF inputs instead of OpenSlide WSIs:
+  #mode: "multiplex"
+  #markers:
+  #- name: "DAPI"
+  #  # mean/std are optional and auto-filled from STAMP's bundled
+  #  # marker_metadata.csv when missing.
+  #  #mean: 0.0832
+  #  #std: 0.0959
+  #- name: "PanCK"
+  #- name: "HER2"
+  #marker_metadata_csv: "/optional/path/to/marker_metadata.csv"
+  # `markers` defines the channel order that STAMP will read from the file,
+  # as well as optional per-channel normalization stats.
+  # In multiplex mode, `stamp preprocess` writes one H5 per slide containing
+  # feats, patch_embeddings, marker_embeddings, token_embeddings, coord_x, coord_y.
+
   # How many workers to use for tile extraction.  Should be less or equal to
   # the number of cores of your system.
   #max_workers: 8
@@ -40,6 +56,9 @@ preprocessing:
   # Add a hash of the entire preprocessing codebase in the feature folder name.
   # Used to distinguish features extracted with different code versions.
   #generate_hash: True
+
+  # For multiplex or WSI preprocessing, split the slide list across all visible GPUs.
+  #parallel: false
 
   # A list (.txt, .xlsx or .csv) specifying filenames to preprocess 
   # instead of processing all data in the directory.
