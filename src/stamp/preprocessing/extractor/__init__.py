@@ -44,7 +44,10 @@ class MultiplexExtractor(Generic[ExtractorModel]):
         [ExtractorModel, Float[Tensor, "batch marker height width"]],
         MultiplexFeatures,
     ]
-    transform: Callable[
-        [Float[Tensor, "marker height width"]],
-        Float[Tensor, "..."],
-    ] | None = None
+    transform: (
+        Callable[
+            [Float[Tensor, "marker height width"]],
+            Float[Tensor, "..."],
+        ]
+        | None
+    ) = None

@@ -16,7 +16,11 @@ from tqdm import tqdm
 
 import stamp
 from stamp.preprocessing.config import MultiplexMarkerConfig
-from stamp.preprocessing.extractor import Extractor, MultiplexExtractor, MultiplexFeatures
+from stamp.preprocessing.extractor import (
+    Extractor,
+    MultiplexExtractor,
+    MultiplexFeatures,
+)
 from stamp.types import DeviceLikeType, TilePixels
 from stamp.utils.cache import get_processing_code_hash
 
@@ -124,13 +128,15 @@ def extract_multiplex_(
                 h5_fp.attrs["marker_names"] = np.asarray(marker_names, dtype=object)
                 h5_fp.attrs["marker_means"] = np.asarray(
                     [
-                        np.nan if marker.mean is None else marker.mean for marker in marker_configs
+                        np.nan if marker.mean is None else marker.mean
+                        for marker in marker_configs
                     ],
                     dtype=np.float32,
                 )
                 h5_fp.attrs["marker_stds"] = np.asarray(
                     [
-                        np.nan if marker.std is None else marker.std for marker in marker_configs
+                        np.nan if marker.std is None else marker.std
+                        for marker in marker_configs
                     ],
                     dtype=np.float32,
                 )
@@ -239,9 +245,14 @@ def _append_batch(
     for dataset in datasets.values():
         dataset.resize(stop, axis=0)
 
-    datasets["feats"][start:stop] = outputs.feats.detach().cpu().numpy().astype(
-        np.float32,
-        copy=False,
+    datasets["feats"][start:stop] = (
+        outputs.feats.detach()
+        .cpu()
+        .numpy()
+        .astype(
+            np.float32,
+            copy=False,
+        )
     )
     datasets["marker_embeddings"][start:stop] = (
         outputs.marker_embeddings.detach().cpu().numpy().astype(np.float32, copy=False)
@@ -336,9 +347,11 @@ def _to_uint8(array: np.ndarray) -> np.ndarray:
         max_value = max(1, np.iinfo(array.dtype).max)
         if max_value == 255:
             return array.astype(np.uint8, copy=False)
-        return np.rint(array.astype(np.float32) / max_value * 255.0).clip(
-            0, 255
-        ).astype(np.uint8)
+        return (
+            np.rint(array.astype(np.float32) / max_value * 255.0)
+            .clip(0, 255)
+            .astype(np.uint8)
+        )
 
     array = array.astype(np.float32, copy=False)
     if array.size == 0:
@@ -452,6 +465,7 @@ def _trim_channels(
         required_channels,
     )
     return slide[:required_channels]
+
 
 def _autofill_marker_statistics(
     *,

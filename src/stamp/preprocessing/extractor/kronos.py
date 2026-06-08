@@ -18,11 +18,9 @@ import torch.nn.functional as F
 from torch import Tensor
 from torch.nn.init import trunc_normal_
 from torch.nn.utils import weight_norm
-from torchvision import transforms
 
 from stamp.preprocessing.config import ExtractorName
 from stamp.preprocessing.extractor import MultiplexExtractor, MultiplexFeatures
-
 
 
 def get_model_config(

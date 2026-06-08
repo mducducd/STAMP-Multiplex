@@ -115,9 +115,7 @@ def test_marker_fusion_dims(
         use_alibi=False,
     )
 
-    marker_embeddings = torch.rand(
-        (batch_size, n_tiles, n_markers, marker_feature_dim)
-    )
+    marker_embeddings = torch.rand((batch_size, n_tiles, n_markers, marker_feature_dim))
     logits = model.forward(marker_embeddings)
     assert logits.shape == (batch_size, num_classes)
 

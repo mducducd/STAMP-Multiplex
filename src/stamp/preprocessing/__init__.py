@@ -111,7 +111,7 @@ class _TileDataset(IterableDataset):
                 canny_cutoff=self.canny_cutoff,
                 default_slide_mpp=self.default_slide_mpp,
             )
-            )
+        )
 
 
 def _resolve_extractor(

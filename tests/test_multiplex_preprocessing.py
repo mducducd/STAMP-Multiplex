@@ -180,7 +180,9 @@ def test_multiplex_preprocess_with_kronos_extractor_name(
     class _StubKronosModel(torch.nn.Module):
         def forward(self, batch: torch.Tensor):
             batch_size, n_markers = batch.shape[:2]
-            feats = torch.full((batch_size, 3), 7.0, dtype=batch.dtype, device=batch.device)
+            feats = torch.full(
+                (batch_size, 3), 7.0, dtype=batch.dtype, device=batch.device
+            )
             marker_embeddings = torch.arange(
                 batch_size * n_markers * 2,
                 dtype=batch.dtype,
