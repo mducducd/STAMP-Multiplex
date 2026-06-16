@@ -1,28 +1,54 @@
-# STAMP: A Protocol for Solid Tumor Associative Modeling in Pathology
+# STAMP: Multiplex-Aware Modeling in Pathology
 
 <img src="docs/STAMP_logo.svg" width="250px" align="right"></img>
 
 ![CI](https://github.com/KatherLab/STAMP/actions/workflows/ci.yml/badge.svg)
 [![STAMP • Nature Protocols](https://img.shields.io/badge/Nature%20Protocols%20Paper-gray.svg)](https://www.nature.com/articles/s41596-024-01047-2)
 
-*An efficient, ready‑to‑use workflow from whole‑slide image to biomarker prediction.*
+*An efficient, ready-to-use workflow from multiplex slide image to feature extraction, marker-aware modeling, and downstream biomarker analysis.*
 
-STAMP is an **end‑to‑end, weakly‑supervised deep‑learning pipeline** that helps discover and evaluate candidate image‑based biomarkers from gigapixel histopathology slides, no pixel‑level annotations required. Backed by a peer‑reviewed protocol and used in multi‑center studies across several tumor types, STAMP lets clinical researchers and machine‑learning engineers collaborate on reproducible computational‑pathology projects with a clear, structured workflow.
+This branch of STAMP is centered on **multiplex TIFF/QPTIFF data**. It supports channel-ordered multiplex slides, multiplex feature extraction, and downstream marker-aware training from the generated HDF5 features. The same CLI still supports classic brightfield WSI workflows, but the main path documented here is:
+
+`multiplex slide -> multiplex features (.h5) -> cross-validation / training / deployment`
+
+STAMP is an **end-to-end deep-learning pipeline** for computational pathology. For multiplex experiments, it helps convert multi-marker slides into reusable feature files that preserve both patch-level and per-marker signal, ready for modeling and statistics without custom glue code.
+
+Multiplex examples in this branch often use **KRONOS** as one reference
+extractor, but STAMP still supports the broader extractor set for classic WSI
+workflows and non-multiplex preprocessing.
 
 **Want to start now?** [Jump to Installation](#installation) or [walk through our Getting Started guide](getting-started.md) for a hands-on tutorial.
 
 ## **Why choose STAMP?**
 
-* 🚀 **Scalable**: Run locally or on HPC (SLURM) with the same CLI; built to handle multi‑center cohorts and large WSI collections.  
-* 🎓 **Beginner‑friendly & expert‑ready**: Zero‑code CLI and YAML config for routine use; optional code‑level customization for advanced research.  
-* 🧩 **Model‑rich**: Out‑of‑the‑box support for **+20 foundation models** at [tile level](getting-started.md#feature-extraction) (e.g., *Virchow‑v2*, *UNI‑v2*) and [slide level](getting-started.md#slide-level-encoding) (e.g., *TITAN*, *COBRA*).  
-* 🔬 **Weakly‑supervised**: End‑to‑end MIL with Transformer aggregation for training, cross‑validation and external deployment; no pixel‑level labels required.  
-* 🧮 **Multi-task learning**: Unified framework for **classification**, **multi-target classification**, **regression**, and **cox-based survival analysis**.
-* 📊 **Stats & results**: Built‑in metrics and patient‑level predictions, ready for analysis and reporting.  
-* 🖼️ **Explainable**: Generates heatmaps and top‑tile exports out‑of‑the‑box for transparent model auditing and publication‑ready figures.  
-* 🤝 **Collaborative by design**: Clinicians drive hypothesis & interpretation while engineers handle compute; STAMP’s modular CLI mirrors real‑world workflows and tracks every step for full reproducibility.  
-* 📑 **Peer‑reviewed**: Protocol published in [*Nature Protocols*](https://www.nature.com/articles/s41596-024-01047-2) and validated across multiple tumor types and centers.  
-* **🔗 MCP Support**: Compatible with Model Context Protocol (MCP) via the \`mcp/\` module, ready for integration into next-gen agentic AI workflows.
+* 🔬 **Built for multiplex data**: Native preprocessing for multi-channel `.qptiff`, `.tiff`, and `.tif` files with channel metadata defined explicitly in config.
+* 🧠 **Multiplex-ready**: Produces multiplex embeddings for downstream analysis, including KRONOS-style patch, marker, and token outputs.
+* 🧩 **Marker-aware modeling**: Train directly on `marker_embeddings` using `marker_fusion`, including optional marker subset selection.
+* 🚀 **Scalable**: Run locally or on HPC (SLURM) with the same CLI; optional multi-GPU preprocessing via `parallel: true`.
+* 🎓 **Beginner-friendly & expert-ready**: CLI plus YAML config for routine runs, with enough flexibility for custom cohorts and panels.
+* 🧪 **Still model-rich**: Outside the multiplex KRONOS path, STAMP continues to support the existing extractor lineup for standard WSI preprocessing.
+* 📊 **Downstream complete**: Includes cross-validation, training, deployment, statistics, and explainability on top of extracted features.
+* 📁 **Notebook-to-pipeline continuity**: The multiplex HDF5 outputs follow the same structure used in `multiplex-notebooks_qtif`, so exploratory work can move into STAMP cleanly.
+* **🔗 MCP Support**: Compatible with Model Context Protocol (MCP) via the `mcp/` module.
+
+## **Multiplex Workflow at a Glance**
+
+1. Prepare channel-ordered multiplex slides in `.qptiff`, `.tiff`, or `.tif` format.
+2. Define the channel-to-marker mapping in `preprocessing.markers`.
+3. Run `stamp preprocess` with `mode: "multiplex"` and the extractor that fits your workflow.
+4. Train or cross-validate directly on the generated `.h5` files.
+5. For marker-aware learning, use `advanced_config.model_name: "marker_fusion"` and optionally `selected_markers`.
+
+Each multiplex output file contains:
+
+- `feats`
+- `patch_embeddings`
+- `marker_embeddings`
+- `token_embeddings`
+- `coord_x`
+- `coord_y`
+
+plus HDF5 attributes such as `marker_names`, `marker_means`, and `marker_stds`.
 
 ## **Real-World Examples of STAMP in Action**
 
@@ -152,10 +178,86 @@ options:
                         Path to config file. Default: config.yaml
 ```
 
+## Multiplex Quick Start
+
+Create a config and make multiplex preprocessing explicit:
+
+```yaml
+preprocessing:
+  output_dir: "/absolute/path/to/output_features"
+  wsi_dir: "/absolute/path/to/multiplex_slides"
+  mode: "multiplex"
+  extractor: "kronos"
+  # Use CUDA for multiplex preprocessing. With parallel: true,
+  # STAMP splits slides across all visible GPUs.
+  device: "cuda"
+  parallel: true
+  tile_size_px: 256
+  tile_size_um: 256.0
+  # Optional: overrides or supplements bundled marker stats
+  # marker_metadata_csv: "/absolute/path/to/marker_metadata.csv"
+  markers:
+    - name: "DAPI"
+      # Optional per-marker normalization values.
+      # If omitted, STAMP tries to auto-fill them from bundled
+      # metadata or from marker_metadata_csv when available.
+      # mean: 0.0832
+      # std: 0.0959
+    - name: "PanCK"
+    - name: "HER2"
+    - name: "CD3"
+    - name: "CD8"
+    - name: "FOXP3"
+  # Keep this at 1 for multiplex preprocessing.
+  max_workers: 1
+```
+
+Then run:
+
+```bash
+stamp --config config.yaml preprocess
+```
+
+For LZW-compressed multiplex TIFF/QPTIFF files, make sure `imagecodecs` is available:
+
+```bash
+uv pip install --python .venv/bin/python imagecodecs
+```
+
+`mean` and `std` are optional for each marker, but they control per-channel
+normalization during multiplex preprocessing. In practice:
+
+- set them directly under each `markers` entry when you already trust your panel-specific values
+- use `marker_metadata_csv` when you want STAMP to fill missing values from a shared metadata table
+- omit them only if you want STAMP to rely on its bundled defaults when a marker match exists
+
+For **multi-channel multiplex preprocessing**, set `max_workers: 1`. In this
+path, throughput is driven primarily by the extractor and optional
+`parallel: true` multi-GPU slide splitting, not by increasing `max_workers`.
+
+`parallel: true` only has an effect when `device` is set to CUDA and multiple
+GPUs are visible. On CPU, preprocessing still runs, but `parallel` does not
+launch multi-GPU workers.
+
+To train directly from multiplex marker embeddings:
+
+```yaml
+crossval:
+  output_dir: "/absolute/path/to/experiment"
+  clini_table: "/absolute/path/to/clini.csv"
+  feature_dir: "/absolute/path/to/output_features"
+  slide_table: "/absolute/path/to/slide.csv"
+  ground_truth_label: "KRAS"
+  feature_dataset_name: "marker_embeddings"
+  selected_markers: ["PanCK", "HER2"]
+
+advanced_config:
+  model_name: "marker_fusion"
+```
+
 ## Getting Started Guide
 
-For a quick introduction how to run stamp,
-check out our [getting started guide](getting-started.md).
+For the multiplex-first walkthrough, check out our [getting started guide](getting-started.md).
 
 ## Reference
 

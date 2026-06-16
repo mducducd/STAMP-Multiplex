@@ -1,20 +1,44 @@
 # Getting Started with Stamp
 
-This guide is designed to help you with your first steps using the stamp pipeline
-to predict biomarkers and other attributes from whole slide images (WSIs).
-To follow along,
-you will need some WSIs,
-a table mapping each of these slides to a patient
-as well as some ground truth we will eventually train a neural network on.
+This guide is designed to help you get started with **multiplex pathology data**
+in STAMP. The focus here is channel-ordered `.qptiff`, `.tiff`, and `.tif`
+slides, multiplex feature extraction, and downstream marker-aware modeling.
+
+To follow along, you will need:
+
+- multiplex slide files
+- the marker order for the slide channels
+- a patient-level clinical table
+- a slide table mapping each patient to a feature file
+- a target label for training or cross-validation
+
+The main workflow in this guide is:
+
+`multiplex slides -> multiplex .h5 features -> crossval / training / statistics`
 
 > [!NOTE]
 > If you prefer a browser-based workflow, see [`STAMP-Workbench`](https://github.com/KatherLab/STAMP-Workbench), a separate web UI for building and monitoring STAMP pipelines. You can install it into the same environment with `uv pip install git+https://github.com/KatherLab/STAMP-Workbench` and launch it from your STAMP checkout with `stamp-workbench`.
 
-## Whole Slide Images
+## Multiplex Slide Inputs
 
-The whole slide images have to be in any of the formats [supported by OpenSlide][openslide].
-For the next steps we assume that all these WSIs are stored in the same directory.
-We will call this directory the _WSI directory_.
+For the next steps we assume that all multiplex slides are stored under the same
+root directory. We will call this the _slide directory_. STAMP discovers slides
+recursively under that directory.
+
+Supported multiplex inputs for this path are:
+
+- `.qptiff`
+- `.tiff`
+- `.tif`
+
+Each image channel must correspond to one marker, and the channel order in the
+file must match the order you define in `preprocessing.markers`.
+
+> [!IMPORTANT]
+> STAMP does not infer marker names from the image file. The `markers` list in
+> the config is the source of truth for channel semantics.
+
+Brightfield WSIs are still supported and must be in a format [supported by OpenSlide][openslide].
 
 [openslide]: https://openslide.org/#about-openslide "About OpenSlide"
 
@@ -35,101 +59,137 @@ mkdir stamp-test-experiment
 stamp --config stamp-test-experiment/config.yaml init
 ```
 
-## Feature Extraction
+## Multiplex Feature Extraction
 
-To do any kind of training on our data, we first have to convert it into a form
-more easily usable by neural networks.
-We do this using a _feature extractor_.
-A feature extractor is a neural network has been trained on a large amount of WSIs
-to extract extract the information relevant for our domain from images.
-This way, we can compress WSIs into a more compact representation,
-which in turn allows us to efficiently train machine learning models with them.
+Before training, we first convert multiplex slides into feature files that are
+easy to reuse across experiments. The example below uses [KRONOS][kronos] as
+one multiplex-capable extractor because it preserves both patch-level and
+per-marker signal.
 
-Stamp currently supports the following feature extractors:
-  - [ctranspath][ctranspath]
-  - [chief_ctranspath][chief_ctranspath]
-  - [DinoBloom][dinobloom]
-  - [CONCH][conch]
-  - [CONCHv1.5][conch1_5]
-  - [UNI][uni]
-  - [UNI2][uni2]
-  - [Virchow][virchow]
-  - [Virchow2][virchow2]
-  - [Gigapath][gigapath]
-  - [H-optimus-0][h_optimus_0]
-  - [H-optimus-1][h_optimus_1]
-  - [mSTAR][mstar]
-  - [MUSK][musk]
-  - [PLIP][plip]
-  - [KEEP][keep]
-  - [TICON][ticon]
-  - [RedDino][reddino]
-  - [KRONOS][kronos]
+STAMP still supports the broader extractor set for preprocessing workflows:
 
+- [ctranspath][ctranspath]
+- [chief_ctranspath][chief_ctranspath]
+- [DinoBloom][dinobloom]
+- [CONCH][conch]
+- [CONCHv1.5][conch1_5]
+- [UNI][uni]
+- [UNI2][uni2]
+- [Virchow][virchow]
+- [Virchow2][virchow2]
+- [Gigapath][gigapath]
+- [H-optimus-0][h_optimus_0]
+- [H-optimus-1][h_optimus_1]
+- [mSTAR][mstar]
+- [MUSK][musk]
+- [PLIP][plip]
+- [KEEP][keep]
+- [TICON][ticon]
+- [RedDino][reddino]
+- [KRONOS][kronos]
 
-As some of the above require you to request access to the model on huggingface,
-we will stick with ctranspath for this example.
+Please refer to the [installation instructions](README.md#installation) to make
+sure the extractor dependencies are available in your environment.
 
-In order to use a feature extractor,
-you also have to install their respective dependencies.
-You can do so by specifying the feature extractor you want to use
-when installing stamp. Please refer to the [installation instructions](README.md#installation)
-
-Open the `stamp-test-experiment/config.yaml` we created in the last step
-and modify the `output_dir`, `wsi_dir` and `cache_dir` entries
-in the `preprocessing` section
-to contain the absolute paths of the directory the configuration file resides in.
-`wsi_dir` Needs to point to a path containing the WSIs you want to extract features from.
-
-The `cache_dir` will be used to save intermediate data.
-Should you decide to try another feature extractor later,
-using the same cache dir again will significantly speed up the extraction process.
-If you will only extract features once, it can be set to `none`.
+Open the `stamp-test-experiment/config.yaml` we created in the last step and
+update the `preprocessing` section with absolute paths and multiplex-specific
+settings.
 
 ```yaml
 # stamp-test-experiment/config.yaml
 
 preprocessing:
   output_dir: "/absolute/path/to/stamp-test-experiment"
-  wsi_dir: "/absolute/path/to/wsi_dir"
-
-  # Other possible values are "mahmood-uni" and "mahmood-conch"
-  extractor: "ctranspath"
-
-  # Having a cache dir will speed up extracting features multiple times,
-  # e.g. with different feature extractors.
-  # Optional.
-  cache_dir: "/absolute/path/to/stamp-test-experiment/../cache"
-  # If you do not want to use a cache,
-  # change the cache dir to the following:
-  # cache_dir: null
-
-  # Device to run feature extraction on.
-  # Set this to "cpu" if you do not have a CUDA-capable GPU.
+  wsi_dir: "/absolute/path/to/multiplex_slide_dir"
+  mode: "multiplex"
+  extractor: "kronos"
+  # Use CUDA for multiplex preprocessing. With parallel: true,
+  # STAMP splits slides across all visible GPUs.
   device: "cuda"
 
-  # How many workers to use for tile extraction.  Should be less or equal to
-  # the number of cores of your system.
-  max_workers: 8
+  # Optional: split slides across all visible GPUs.
+  parallel: true
+
+  # KRONOS expects tile_size_px divisible by 16.
+  tile_size_px: 256
+  tile_size_um: 256.0
+
+  # Optional cache for repeated extraction experiments.
+  cache_dir: "/absolute/path/to/stamp-test-experiment/../cache"
+
+  # Optional CSV with columns: marker_name, marker_mean, marker_std
+  # marker_metadata_csv: "/absolute/path/to/marker_metadata.csv"
+
+  # Markers must be listed in the same order as the image channels.
+  markers:
+    - name: "DAPI"
+      # Optional per-marker normalization values used during preprocessing.
+      # If omitted, STAMP tries to auto-fill them from bundled metadata
+      # or from marker_metadata_csv when available.
+      # mean: 0.0832
+      # std: 0.0959
+    - name: "CD8"
+    - name: "Ki67"
+    - name: "GrzB"
+    - name: "FOXP3"
+    - name: "CD4"
+    - name: "CD3"
+
+  # Keep this at 1 for multiplex preprocessing.
+  max_workers: 1
 ```
 
-Extracting the features is then as easy as running
+For LZW-compressed multiplex TIFF/QPTIFF files, STAMP requires `imagecodecs`:
+
+```sh
+uv pip install --python .venv/bin/python imagecodecs
+```
+
+The `mean` and `std` fields are optional per marker, but they matter because
+STAMP uses them for channel normalization. You can provide them inline under
+each marker entry, or let STAMP fill missing values from `marker_metadata_csv`
+or from its bundled multiplex marker metadata when the marker names match.
+
+For **multi-channel multiplex preprocessing**, keep `max_workers: 1`. In this
+workflow, scaling comes mainly from the model/device path and optional
+`parallel: true` multi-GPU slide splitting rather than larger worker counts.
+
+`parallel: true` only affects CUDA runs. If `device: "cpu"` is used, STAMP does
+not launch multi-GPU preprocessing workers.
+
+Extract the features with:
+
 ```sh
 stamp --config stamp-test-experiment/config.yaml preprocess
 ```
-Depending on the size of your dataset and your hardware,
-this process may take anything between a few hours and days.
+Depending on cohort size and hardware, this process may take hours to days.
 
-You can interrupt this process at any time.
-It will continue where you stopped it the next time you run `stamp preprocess`.
+You can interrupt this process and resume later by running the same command again.
 
-As the preprocessing is running,
-you can see the output directory fill up with the features, saved in `.h5` files,
-as well as `.jpg`s showing from which parts of the slide features are extracted.
-Most of the background should be marked in red,
-meaning ignored that it was ignored during feature extraction.
+This writes one `.h5` file per slide with:
 
-> In case you want to use a gated model (e.g. Virchow2), you need to login in your console using:
+- `feats`
+- `patch_embeddings`
+- `marker_embeddings`
+- `token_embeddings`
+- `coord_x`
+- `coord_y`
+
+as well as HDF5 attributes such as:
+
+- `marker_names`
+- `marker_means`
+- `marker_stds`
+
+This layout matches the multiplex feature structure used in
+`multiplex-notebooks_qtif`, so notebook exploration can move into STAMP runs
+without reshaping the data format.
+
+If a multiplex slide contains more channels than listed in `markers`, STAMP uses
+the first `len(markers)` channels in file order and logs a warning. If a slide
+contains fewer channels than configured, preprocessing fails for that slide.
+
+> In case you want to use a gated model such as KRONOS, you may need to log in:
 > ```
 >huggingface-cli login
 > ```
@@ -171,92 +231,22 @@ meaning ignored that it was ignored during feature extraction.
 [kronos]: https://huggingface.co/MahmoodLab/kronos
 
 
-## Multiplex Feature Extraction
-
-Stamp also supports multiplex TIFF/QPTIFF preprocessing.
-This path is intended for channel-ordered multiplex images where the `markers`
-list in the config defines the semantic meaning of each channel in file order.
-
-For LZW-compressed multiplex TIFF/QPTIFF files, STAMP requires `imagecodecs`.
-If you installed STAMP before this dependency was added, install it into the
-active environment before running multiplex preprocessing:
-
-```sh
-uv pip install --python .venv/bin/python imagecodecs
-```
-
-For multiplex extraction with KRONOS, the most important preprocessing settings are:
-
-```yaml
-preprocessing:
-  output_dir: "/absolute/path/to/output_features"
-  wsi_dir: "/absolute/path/to/multiplex_slides"
-  mode: "multiplex"
-  extractor: "kronos"
-  device: "cuda"
-
-  # Optional: split slides across all visible GPUs.
-  parallel: true
-
-  # Patch size in pixels. KRONOS expects values divisible by 16.
-  tile_size_px: 256
-  tile_size_um: 256.0
-
-  # Optional CSV used to auto-fill missing marker mean/std values.
-  marker_metadata_csv: "/absolute/path/to/marker_metadata.csv"
-
-  # Markers must be listed in the same order as the image channels.
-  markers:
-    - name: "DAPI"
-    - name: "CD8"
-    - name: "Ki67"
-    - name: "GrzB"
-    - name: "FOXP3"
-    - name: "CD4"
-    - name: "CD3"
-```
-
-Then run:
-
-```sh
-stamp --config stamp-test-experiment/config.yaml preprocess
-```
-
-This writes one `.h5` file per slide with:
-
-- `feats`
-- `patch_embeddings`
-- `marker_embeddings`
-- `token_embeddings`
-- `coord_x`
-- `coord_y`
-
-If a multiplex slide contains more channels than listed in `markers`,
-STAMP uses the first `len(markers)` channels in file order and logs a warning.
-If a slide contains fewer channels than configured, preprocessing fails for that slide.
-
-
 ## Doing Cross-Validation on the Data Set
 
-One way to quickly ascertain if a neural network can be trained to recognize a specific pattern
-without the need to source a separate testing set
-is to perform a cross-validation on it.
-During a cross validation,
-we train multiple models on a subset of the data,
-testing its effectiveness on the held-out part of the data not used during training.
-To perform a cross-validation, add the following lines to your `stamp-test-experiment/config.yaml`,
-with `feature_dir` adapted to match the directory the `.h5` files were output to in the last step.
-`clini_table` and `slide_table` both need to point to tables,
-either in excel or `.csv` format,
-with contents as described below.
-Finally, `ground_truth_label` needs to contain the column name
-of the data we want to train our model on.
-For single-target classification, use one column name.
-For multi-target classification, use a list of column names and set
-`advanced_config.model_name: "barspoon"`.
-Stamp only can be used to train neural networks for categorical targets.
-For single-target runs, we recommend explicitly setting the possible classes
-using the `categories` field.
+Once multiplex features have been extracted, the usual next step is
+cross-validation. This lets you test whether the feature representation carries
+signal for your target before setting up a separate deployment workflow.
+
+To perform a cross-validation, add the following lines to your
+`stamp-test-experiment/config.yaml`. Set `feature_dir` to the directory that now
+contains your multiplex `.h5` files. `clini_table` and `slide_table` should
+point to Excel or CSV files with the required patient and filename columns.
+
+`ground_truth_label` is the clinical target you want to predict. For
+single-target classification, use one column name. For multi-target
+classification, use a list of column names and set
+`advanced_config.model_name: "barspoon"`. For single-target runs, we recommend
+explicitly setting `categories`.
 
 ```yaml
 # stamp-test-experiment/config.yaml
@@ -271,7 +261,7 @@ crossval:
   clini_table: "metadata-CRC/TCGA-CRC-DX_CLINI.xlsx"
 
   # Directory the extracted features are saved in.
-  feature_dir: "/absolute/path/to/stamp-test-experiment/xiyuewang-ctranspath-7c998680-112fc79c"
+  feature_dir: "/absolute/path/to/stamp-test-experiment/multiplex_features"
 
   # A table (.xlsx or .csv) relating every patient to their feature files.
   # The table must contain at least two columns, one titled "PATIENT",
@@ -611,8 +601,8 @@ heatmaps:
 ## Explainability for Multiplex Marker Models
 
 The `stamp explainability` command generates marker-level outputs for multiplex
-feature files. This is intended for marker-aware models such as
-`marker_fusion`, where each `.h5` file contains per-marker embeddings in the
+feature files. This is currently supported only for the `marker_fusion` model,
+where each `.h5` file contains per-marker embeddings in the
 `marker_embeddings` dataset.
 
 For explainability, STAMP expects multiplex `.h5` files to contain:
@@ -657,6 +647,7 @@ stamp --config stamp-test-experiment/config.yaml explainability
 
 Behavior notes:
 
+- Multiplex explainability currently supports `marker_fusion` checkpoints only.
 - If `marker_names` is omitted in the config, STAMP reads marker labels from
   the `.h5` `marker_names` attribute.
 - If the checkpoint was trained with `selected_markers`, explainability uses
