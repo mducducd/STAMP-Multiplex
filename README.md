@@ -1,0 +1,339 @@
+# STAMP: Multiplex-Aware Modeling in Pathology
+
+<img src="docs/STAMP_logo.svg" width="250px" align="right"></img>
+
+![CI](https://github.com/KatherLab/STAMP/actions/workflows/ci.yml/badge.svg)
+[![STAMP • Nature Protocols](https://img.shields.io/badge/Nature%20Protocols%20Paper-gray.svg)](https://www.nature.com/articles/s41596-024-01047-2)
+
+*An efficient, ready-to-use workflow from multiplex slide image to feature extraction, marker-aware modeling, and downstream biomarker analysis.*
+
+This branch of STAMP is centered on **multiplex TIFF/QPTIFF data**. It supports channel-ordered multiplex slides, multiplex feature extraction, and downstream marker-aware training from the generated HDF5 features. The same CLI still supports classic brightfield WSI workflows, but the main path documented here is:
+
+`multiplex slide -> multiplex features (.h5) -> cross-validation / training / deployment`
+
+STAMP is an **end-to-end deep-learning pipeline** for computational pathology. For multiplex experiments, it helps convert multi-marker slides into reusable feature files that preserve both patch-level and per-marker signal, ready for modeling and statistics without custom glue code.
+
+Multiplex examples in this branch often use **KRONOS** as one reference
+extractor, but STAMP still supports the broader extractor set for classic WSI
+workflows and non-multiplex preprocessing.
+
+**Want to start now?** [Jump to Installation](#installation) or [walk through our Getting Started guide](getting-started.md) for a hands-on tutorial.
+
+## **Why choose STAMP?**
+
+* 🔬 **Built for multiplex data**: Native preprocessing for multi-channel `.qptiff`, `.tiff`, and `.tif` files with channel metadata defined explicitly in config.
+* 🧠 **Multiplex-ready**: Produces multiplex embeddings for downstream analysis, including KRONOS-style patch, marker, and token outputs.
+* 🧩 **Marker-aware modeling**: Train directly on `marker_embeddings` using `marker_fusion`, including optional marker subset selection.
+* 🚀 **Scalable**: Run locally or on HPC (SLURM) with the same CLI; optional multi-GPU preprocessing via `parallel: true`.
+* 🎓 **Beginner-friendly & expert-ready**: CLI plus YAML config for routine runs, with enough flexibility for custom cohorts and panels.
+* 🧪 **Still model-rich**: Outside the multiplex KRONOS path, STAMP continues to support the existing extractor lineup for standard WSI preprocessing.
+* 📊 **Downstream complete**: Includes cross-validation, training, deployment, statistics, and explainability on top of extracted features.
+* 📁 **Notebook-to-pipeline continuity**: The multiplex HDF5 outputs follow the same structure used in `multiplex-notebooks_qtif`, so exploratory work can move into STAMP cleanly.
+* **🔗 MCP Support**: Compatible with Model Context Protocol (MCP) via the `mcp/` module.
+
+## **Multiplex Workflow at a Glance**
+
+1. Prepare channel-ordered multiplex slides in `.qptiff`, `.tiff`, or `.tif` format.
+2. Define the channel-to-marker mapping in `preprocessing.markers`.
+3. Run `stamp preprocess` with `mode: "multiplex"` and the extractor that fits your workflow.
+4. Train or cross-validate directly on the generated `.h5` files.
+5. For marker-aware learning, use `advanced_config.model_name: "marker_fusion"` and optionally `selected_markers`.
+
+Each multiplex output file contains:
+
+- `feats`
+- `patch_embeddings`
+- `marker_embeddings`
+- `token_embeddings`
+- `coord_x`
+- `coord_y`
+
+plus HDF5 attributes such as `marker_names`, `marker_means`, and `marker_stds`.
+
+## **Real-World Examples of STAMP in Action**
+
+- **[Squamous Tumors & Survival](https://www.sciencedirect.com/science/article/pii/S0893395225001425):** In a multi-cohort study spanning four squamous carcinoma types (head & neck, esophageal, lung, cervical), STAMP was used to extract slide-level features for a deep learning model that predicted patient survival directly from H&E whole-slide images.  
+
+- **[Inflammatory Bowel Disease Atlas](https://www.researchsquare.com/article/rs-6443303/v1):** In a 1,002-patient multi-center IBD study, all histology slides were processed with the STAMP workflow, enabling a weakly-supervised MIL model to accurately predict histologic disease activity scores from H&E tissue sections.  
+
+- **[Foundation Model Benchmarking](https://arxiv.org/pdf/2408.15823):** A large-scale evaluation of 19 pathology foundation models built its pipeline on STAMP (v1.1.0) for standardized WSI tiling and feature extraction, demonstrating STAMP’s utility as an open-source framework for reproducible model training across diverse cancer biomarkers.  
+
+- **[Breast Cancer Risk Stratification](https://doi.org/10.1038/s41467-025-57283-x):** In an international early breast cancer study, STAMP performed slide tessellation and color normalization (e.g. 1.14 µm/px resolution, Macenko norm) as part of a multimodal transformer pipeline to predict recurrence risk (Oncotype DX scores) from pathology images.  
+
+- **[Endometrial Cancer Subtyping](https://www.actscience.org/Portals/0/Translational%20Science%202025/Top%2050%20Posters/TS25_VincentWagner_OralPosterSession.pdf):** A recent endometrial cancer project employed a modified STAMP pipeline with a pre-trained vision transformer (Virchow2) to predict molecular tumor subtypes directly from H&E slides, achieving strong diagnostic performance in cross-validation.  
+
+
+## Installation
+To setup STAMP you need [uv](https://docs.astral.sh/uv/).
+
+> [!IMPORTANT]
+> We use the experimental `match runtime` feature of `uv` which was introduced in [version 0.8.5](https://github.com/astral-sh/uv/releases/tag/0.8.5).
+> Please empty your `triton` cache before installing STAMP: `rm -r ~/.triton`.
+
+### Install or Update uv:
+
+```bash
+# Install uv
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Update uv
+uv self update
+```
+
+### Install STAMP from the Repository:
+
+```bash
+git clone https://github.com/KatherLab/STAMP.git
+cd STAMP
+```
+
+```bash
+# GPU (CUDA) Installation (excluding conchv1_5, gigapath and musk)
+
+uv sync --extra gpu
+source .venv/bin/activate
+```
+
+```bash
+# CPU-only Installation (excluding conchv1_5, gigapath and musk)
+
+uv sync --extra cpu
+source .venv/bin/activate
+```
+
+For the full GPU stack (`conchv1_5`, `gigapath`, `musk`), install with the prebuilt flash-attn wheel — no compile required. Supported on Linux x86_64, Linux aarch64, or Windows x86_64, with Python 3.13, CUDA 13.0, and torch 2.10. Wheels are hosted on the [STAMP releases](https://github.com/KatherLab/STAMP/releases) page.
+
+```bash
+# GPU (CUDA) Installation - prebuilt flash-attn wheel, no compile
+uv sync --extra gpu_prebuilt
+source .venv/bin/activate
+```
+
+If you encounter errors during installation please read Installation Troubleshooting [below](#installation-troubleshooting). If the prebuilt wheel does not fit your platform or you need a different flash-attn version, see [Advanced: Build flash-attn from source](#advanced-build-flash-attn-from-source).
+
+### Additional Dependencies
+
+> [!IMPORTANT]
+> STAMP additionally requires OpenCV dependencies to be installed.
+>
+
+> For Ubuntu < 23.10:
+> ```bash
+> apt update && apt install -y libgl1-mesa-glx
+> ```
+>
+> For Ubuntu >= 23.10:
+> ```bash
+> apt update && apt install -y libgl1 libglx-mesa0 libglib2.0-0
+> ```
+
+### Advanced: Build flash-attn from source
+
+> [!CAUTION]
+> Building flash-attn can take an extended amount of time and consume a lot of RAM and CPU time!
+>
+> You must have [Nvidia CUDA Toolkit 13.0](https://developer.nvidia.com/cuda-13-0-2-download-archive) installed and Nvidia Driver version 580 or newer.
+>
+> The `nvcc --version` command must indicate that 13.0 is installed and is currently in PATH: `Cuda compilation tools, release 13.0, V13.0.88`.
+>
+> If you get another version or `Command 'nvcc' not found`, add it to the PATH:
+> ```bash
+> export CUDA_HOME=/usr/local/cuda-13.0
+> export PATH="${CUDA_HOME}/bin:$PATH"
+> ```
+>
+> Run `nvcc --version` to ensure flash-attn will be built for CUDA 13.0.
+
+```bash
+# GPU (CUDA) Installation - building flash-attn for supporting conchv1_5, gigapath and musk
+MAX_JOBS=2 uv sync --extra gpu_all # to speed up the build time increase max_jobs! This might use more RAM!
+source .venv/bin/activate
+```
+
+## Basic Usage
+
+If the installation was successful, running `stamp` in your terminal should yield the following output:
+```
+$ stamp
+usage: stamp [-h] [--config CONFIG_FILE_PATH] {init,preprocess,encode_slides,encode_patients,train,crossval,deploy,statistics,config,heatmaps} ...
+
+STAMP: Solid Tumor Associative Modeling in Pathology
+
+positional arguments:
+  {init,preprocess,encode_slides,encode_patients,train,crossval,deploy,statistics,config,heatmaps}
+    init                Create a new STAMP configuration file at the path specified by --config
+    preprocess          Preprocess whole-slide images into feature vectors
+    encode_slides       Encode patch-level features into slide-level embeddings
+    encode_patients     Encode features into patient-level embeddings
+    train               Train a Vision Transformer model
+    crossval            Train a Vision Transformer model with cross validation for modeling.n_splits folds
+    deploy              Deploy a trained Vision Transformer model
+    statistics          Generate AUROCs and AUPRCs with 95%CI for a trained Vision Transformer model
+    config              Print the loaded configuration
+    heatmaps            Generate heatmaps for a trained model
+
+options:
+  -h, --help            show this help message and exit
+  --config CONFIG_FILE_PATH, -c CONFIG_FILE_PATH
+                        Path to config file. Default: config.yaml
+```
+
+## Multiplex Quick Start
+
+Create a config and make multiplex preprocessing explicit:
+
+```yaml
+preprocessing:
+  output_dir: "/absolute/path/to/output_features"
+  wsi_dir: "/absolute/path/to/multiplex_slides"
+  mode: "multiplex"
+  extractor: "kronos"
+  # Use CUDA for multiplex preprocessing. With parallel: true,
+  # STAMP splits slides across all visible GPUs.
+  device: "cuda"
+  parallel: true
+  tile_size_px: 256
+  tile_size_um: 256.0
+  # Optional: overrides or supplements bundled marker stats
+  # marker_metadata_csv: "/absolute/path/to/marker_metadata.csv"
+  markers:
+    - name: "DAPI"
+      # Optional per-marker normalization values.
+      # If omitted, STAMP tries to auto-fill them from bundled
+      # metadata or from marker_metadata_csv when available.
+      # mean: 0.0832
+      # std: 0.0959
+    - name: "PanCK"
+    - name: "HER2"
+    - name: "CD3"
+    - name: "CD8"
+    - name: "FOXP3"
+  # Keep this at 1 for multiplex preprocessing.
+  max_workers: 1
+```
+
+Then run:
+
+```bash
+stamp --config config.yaml preprocess
+```
+
+For LZW-compressed multiplex TIFF/QPTIFF files, make sure `imagecodecs` is available:
+
+```bash
+uv pip install --python .venv/bin/python imagecodecs
+```
+
+`mean` and `std` are optional for each marker, but they control per-channel
+normalization during multiplex preprocessing. In practice:
+
+- set them directly under each `markers` entry when you already trust your panel-specific values
+- use `marker_metadata_csv` when you want STAMP to fill missing values from a shared metadata table
+- omit them only if you want STAMP to rely on its bundled defaults when a marker match exists
+
+For **multi-channel multiplex preprocessing**, set `max_workers: 1`. In this
+path, throughput is driven primarily by the extractor and optional
+`parallel: true` multi-GPU slide splitting, not by increasing `max_workers`.
+
+`parallel: true` only has an effect when `device` is set to CUDA and multiple
+GPUs are visible. On CPU, preprocessing still runs, but `parallel` does not
+launch multi-GPU workers.
+
+To train directly from multiplex marker embeddings:
+
+```yaml
+crossval:
+  output_dir: "/absolute/path/to/experiment"
+  clini_table: "/absolute/path/to/clini.csv"
+  feature_dir: "/absolute/path/to/output_features"
+  slide_table: "/absolute/path/to/slide.csv"
+  ground_truth_label: "KRAS"
+  feature_dataset_name: "marker_embeddings"
+  selected_markers: ["PanCK", "HER2"]
+
+advanced_config:
+  model_name: "marker_fusion"
+```
+
+## Getting Started Guide
+
+For the multiplex-first walkthrough, check out our [getting started guide](getting-started.md).
+
+## Reference
+
+If you find our work useful in your research
+or if you use parts of this code
+please consider citing our [Nature Protocols publication](https://www.nature.com/articles/s41596-024-01047-2):
+```
+@Article{ElNahhas2024,
+  author={El Nahhas, Omar S. M. and van Treeck, Marko and W{\"o}lflein, Georg and Unger, Michaela and Ligero, Marta and Lenz, Tim and Wagner, Sophia J. and Hewitt, Katherine J. and Khader, Firas and Foersch, Sebastian and Truhn, Daniel and Kather, Jakob Nikolas},
+  title={From whole-slide image to biomarker prediction: end-to-end weakly supervised deep learning in computational pathology},
+  journal={Nature Protocols},
+  year={2024},
+  month={Sep},
+  day={16},
+  issn={1750-2799},
+  doi={10.1038/s41596-024-01047-2},
+  url={https://doi.org/10.1038/s41596-024-01047-2}
+}
+```
+
+> [!NOTE]
+> This repo contains an updated version of the codebase.
+> For a version compatible with the instructions in the paper,
+> please check out [version 1 of STAMP][stamp v1].
+
+[stamp paper]: https://www.nature.com/articles/s41596-024-01047-2 "From whole-slide image to biomarker prediction: end-to-end weakly supervised deep learning in computational pathology"
+[stamp v1]: https://github.com/KatherLab/STAMP/tree/v1
+
+## Installation Troubleshooting
+
+> [!NOTE]
+> Installing the GPU version of STAMP might force the compilation of the `flash-attn` package (as well as `mamba-ssm` and `causal_conv1d`). This can take a long time and requires a lot of memory. You can limit the number of parallel compilation jobs by setting the `MAX_JOBS` environment variable before running the installation command, e.g. `MAX_JOBS=4 uv sync --extra build --extra gpu`.
+
+
+#### Triton Errors
+
+If you encounter errors related to the [Triton package like the following](https://github.com/pytorch/pytorch/issues/153737):
+
+```bash
+SystemError: PY_SSIZE_T_CLEAN macro must be defined for '#' formats
+``` 
+
+Try to delete the triton cache: 
+
+```bash
+rm -r ~/.triton
+```
+
+A re-installation might be necessary afterwards.
+
+#### Undefined Symbol Error
+
+If you encounter an error similar to the following when importing flash_attn, mamba or causal_conv1d on a GPU system, it usually indicates that the torch version in your environment does not match the torch version used to build the flash-attn, mamba or causal_conv1d package. This can happen if you already built these packages for another environment or if for any reason between the installation commands with only `--extra build` and `--extra gpu` the torch version was changed.
+
+```
+>       import flash_attn_2_cuda as flash_attn_gpu
+E       ImportError: [...]/.venv/lib/python3.12/site-packages/flash_attn_2_cuda.cpython-312-x86_64-linux-gnu.so: undefined symbol: _ZN3c105ErrorC2ENS_14SourceLocationENSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEE
+
+.venv/lib/python3.12/site-packages/flash_attn/flash_attn_interface.py:15: ImportError
+```
+
+In case you encounter this error on a gpu installation, you can fix it by going back to the environment just with `--extra build`, clearing the uv cache and then reinstalling the `--extra gpu` packages:
+
+```bash
+uv cache clean flash_attn
+uv cache clean mamba-ssm
+uv cache clean causal_conv1d
+
+# Now it should re-build the packages with the correct torch version
+
+# With uv sync in the cloned repository
+uv sync --extra build
+uv sync --extra build --extra gpu
+```
+
+## Reproducibility
+> [!NOTE]
+> We use a central `Seed` utility to set seeds for PyTorch, NumPy, and Python’s `random`. This makes data loading and model initialization reproducible. Always call `Seed.set(seed)` once at startup.
+> We do not enable [`torch.use_deterministic_algorithms()`](https://pytorch.org/docs/stable/notes/randomness.html#reproducibility) because it can cause large performance drops. Expect runs with the same seed to follow the same training trajectory, but not bit-for-bit identical low-level kernels.
