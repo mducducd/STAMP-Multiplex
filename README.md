@@ -1,4 +1,4 @@
-# STAMP: Multiplex-Aware Modeling in Pathology
+# STAMP: A Protocol for Solid Tumor Associative Modeling in Pathology
 
 <img src="docs/STAMP_logo.svg" width="250px" align="right"></img>
 
