@@ -19,6 +19,10 @@ workflows and non-multiplex preprocessing.
 
 **Want to start now?** [Jump to Installation](#installation) or [walk through our Getting Started guide](getting-started.md) for a hands-on tutorial.
 
+## **Multiplex Pipeline Overview**
+
+![STAMP multiplex workflow](docs/stamp-multiplex-workflow.png)
+
 ## **Why choose STAMP?**
 
 * 🔬 **Built for multiplex data**: Native preprocessing for multi-channel `.qptiff`, `.tiff`, and `.tif` files with channel metadata defined explicitly in config.
